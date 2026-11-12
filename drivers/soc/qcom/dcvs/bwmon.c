@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "qcom-bwmon: " fmt
@@ -21,6 +21,7 @@
 #include <linux/spinlock.h>
 #include <linux/log2.h>
 #include <linux/sizes.h>
+#include <linux/suspend.h>
 #include <soc/qcom/dcvs.h>
 #include <trace/hooks/sched.h>
 #include "bwmon.h"
@@ -496,18 +497,6 @@ static int __bw_hwmon_sample_end(struct bw_hwmon *hwmon)
 		return __bw_hwmon_sw_sample_end(hwmon);
 }
 
-static int bw_hwmon_sample_end(struct bw_hwmon *hwmon)
-{
-	unsigned long flags;
-	int wake;
-
-	spin_lock_irqsave(&sample_irq_lock, flags);
-	wake = __bw_hwmon_sample_end(hwmon);
-	spin_unlock_irqrestore(&sample_irq_lock, flags);
-
-	return wake;
-}
-
 static unsigned long to_mbps_zone(struct hwmon_node *node, unsigned long mbps)
 {
 	int i;
@@ -722,6 +711,24 @@ out:
 	return dst_vote;
 }
 
+static inline u64 mbps_to_khz(u64 val, u32 width)
+{
+#ifdef CONFIG_ARM64
+	return MBPS_TO_KHZ(val, width);
+#else
+	return div_u64(val * 1000, width);
+#endif
+}
+
+static inline u64 khz_to_mbps(u64 val, u32 width)
+{
+#ifdef CONFIG_ARM64
+	return KHZ_TO_MBPS(val, width);
+#else
+	return div_u64((u64)val * width, 1000);
+#endif
+}
+
 /*
  * Governor function that computes new target frequency
  * based on bw measurement (mbps) and updates cur_freq (khz).
@@ -735,29 +742,31 @@ static bool bwmon_update_cur_freq(struct hwmon_node *node)
 	u32 primary_mbps;
 
 	get_bw_and_set_irq(node, &new_freq);
-
 	/* first convert freq from mbps to khz */
-	new_freq.ab = MBPS_TO_KHZ(new_freq.ab, hw->dcvs_width);
-	new_freq.ib = MBPS_TO_KHZ(new_freq.ib, hw->dcvs_width);
+	new_freq.ab = mbps_to_khz(new_freq.ab, hw->dcvs_width);
+	new_freq.ib = mbps_to_khz(new_freq.ib, hw->dcvs_width);
 	new_freq.ib = max(new_freq.ib, node->min_freq);
 	new_freq.ib = min(new_freq.ib, node->max_freq);
-	primary_mbps = KHZ_TO_MBPS(new_freq.ib, hw->dcvs_width);
+	primary_mbps = khz_to_mbps(new_freq.ib, hw->dcvs_width);
 
 	if (new_freq.ib != node->cur_freqs[0].ib ||
-			new_freq.ab != node->cur_freqs[0].ab) {
+	    new_freq.ab != node->cur_freqs[0].ab) {
 		node->cur_freqs[0].ib = new_freq.ib;
 		node->cur_freqs[0].ab = new_freq.ab;
+
 		if (hw->second_vote_supported) {
 			if (hw->second_map)
-				node->cur_freqs[1].ib = get_dst_from_map(hw,
-								new_freq.ib);
+				node->cur_freqs[1].ib =
+					get_dst_from_map(hw, new_freq.ib);
 			else if (hw->second_dcvs_width)
-				node->cur_freqs[1].ib = MBPS_TO_KHZ(primary_mbps,
-							hw->second_dcvs_width);
+				node->cur_freqs[1].ib =
+					mbps_to_khz(primary_mbps,
+						    hw->second_dcvs_width);
 			else
 				node->cur_freqs[1].ib = 0;
+
 			node->cur_freqs[1].ib = min(node->cur_freqs[1].ib,
-							hw->second_vote_limit);
+					hw->second_vote_limit);
 		}
 		return true;
 	}
@@ -856,8 +865,8 @@ static int start_monitor(struct bw_hwmon *hwmon)
 
 	node->prev_ts = ktime_get();
 	node->prev_ab = 0;
-	mbps = KHZ_TO_MBPS(node->cur_freqs[0].ib, hwmon->dcvs_width) *
-					node->io_percent / 100;
+	mbps = div_u64(khz_to_mbps(node->cur_freqs[0].ib,
+		hwmon->dcvs_width) * node->io_percent, 100);
 	hwmon->up_wake_mbps = mbps;
 	hwmon->down_wake_mbps = MIN_MBPS;
 	ret = hwmon->start_hwmon(hwmon, mbps);
@@ -963,6 +972,19 @@ static struct bwmon_second_map *init_second_map(struct device *dev,
 
 	return tbl;
 
+}
+
+static int bwmon_pm_notifier(struct notifier_block *nb, unsigned long action,
+				void *unused)
+{
+	struct bw_hwmon *hw = container_of(nb, struct bw_hwmon, pm_nb);
+
+	if (action == PM_HIBERNATION_PREPARE)
+		stop_monitor(hw);
+	else if (action == PM_POST_HIBERNATION)
+		start_monitor(hw);
+
+	return NOTIFY_OK;
 }
 
 #define ENABLE_MASK BIT(0)
@@ -1566,12 +1588,25 @@ static irqreturn_t
 __bwmon_intr_handler(int irq, void *dev, enum mon_reg_type type)
 {
 	struct bwmon *m = dev;
+	unsigned long flags;
+	u32 intr_status;
+	int wake;
 
-	m->intr_status = mon_irq_status(m, type);
-	if (!m->intr_status)
+	intr_status = mon_irq_status(m, type);
+	if (!intr_status)
 		return IRQ_NONE;
 
-	if (bw_hwmon_sample_end(&m->hw) > 0)
+	/*
+	 * Assign m->intr_status inside sample_irq_lock to prevent a data
+	 * race with get_zone(), which reads m->intr_status while holding
+	 * the same lock from the workqueue path.
+	 */
+	spin_lock_irqsave(&sample_irq_lock, flags);
+	m->intr_status = intr_status;
+	wake = __bw_hwmon_sample_end(&m->hw);
+	spin_unlock_irqrestore(&sample_irq_lock, flags);
+
+	if (wake > 0)
 		return IRQ_WAKE_THREAD;
 
 	return IRQ_HANDLED;
@@ -1650,10 +1685,8 @@ static __always_inline int __start_bw_hwmon(struct bw_hwmon *hw,
 			ret);
 		return ret;
 	}
-	INIT_WORK(&hw->work, &bwmon_monitor_work);
 
 	mon_disable(m, type);
-
 	mon_clear(m, false, type);
 
 	switch (type) {
@@ -1702,6 +1735,7 @@ void __stop_bw_hwmon(struct bw_hwmon *hw, enum mon_reg_type type)
 
 	bwmon_monitor_stop(hw);
 	mon_irq_disable(m, type);
+	synchronize_irq(m->irq);
 	free_irq(m->irq, m);
 	mon_disable(m, type);
 	mon_clear(m, true, type);
@@ -1992,6 +2026,10 @@ static int qcom_bwmon_driver_probe(struct platform_device *pdev)
 						bwmon_jiffies_update_cb, NULL);
 	}
 	mutex_unlock(&bwmon_lock);
+
+	INIT_WORK(&m->hw.work, &bwmon_monitor_work);
+	m->hw.pm_nb.notifier_call = bwmon_pm_notifier;
+	register_pm_notifier(&m->hw.pm_nb);
 	ret = start_monitor(&m->hw);
 	if (ret < 0) {
 		dev_err(dev, "Error starting BWMON monitor: %d\n", ret);

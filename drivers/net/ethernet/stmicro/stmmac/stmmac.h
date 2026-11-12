@@ -23,12 +23,12 @@
 #include <linux/reset.h>
 #include <net/page_pool.h>
 #include <uapi/linux/bpf.h>
+#include <linux/bootmarker_kernel.h>
 
 struct stmmac_resources {
 	void __iomem *addr;
 	u8 mac[ETH_ALEN];
 	int wol_irq;
-	int lpi_irq;
 	int irq;
 	int sfty_ce_irq;
 	int sfty_ue_irq;
@@ -55,6 +55,12 @@ struct stmmac_tx_info {
 #define STMMAC_TBS_AVAIL	BIT(0)
 #define STMMAC_TBS_EN		BIT(1)
 
+#define AIR_BOARD 1
+#define STAR_BOARD 2
+#define PHY_1G 1
+#define PHY_25G 2
+#define SWITCH 3
+
 /* Frequently used values are kept adjacent for cache effect */
 struct stmmac_tx_queue {
 	u32 tx_count_frames;
@@ -77,6 +83,7 @@ struct stmmac_tx_queue {
 	dma_addr_t dma_tx_phy;
 	dma_addr_t tx_tail_addr;
 	u32 mss;
+	u32 pid;
 };
 
 struct stmmac_rx_buffer {
@@ -90,6 +97,10 @@ struct stmmac_rx_buffer {
 	};
 	struct page *sec_page;
 	dma_addr_t sec_addr;
+};
+
+struct stmmac_xdp_buff {
+	struct xdp_buff xdp;
 };
 
 struct stmmac_rx_queue {
@@ -205,7 +216,6 @@ struct stmmac_priv {
 	u32 tx_coal_frames[MTL_MAX_TX_QUEUES];
 	u32 tx_coal_timer[MTL_MAX_TX_QUEUES];
 	u32 rx_coal_frames[MTL_MAX_TX_QUEUES];
-	bool tx_coal_timer_disable;
 
 	int hwts_tx_en;
 	bool tx_path_in_lpi_mode;
@@ -252,7 +262,6 @@ struct stmmac_priv {
 	bool wol_irq_disabled;
 	int clk_csr;
 	struct timer_list eee_ctrl_timer;
-	int lpi_irq;
 	int eee_enabled;
 	int eee_active;
 	int tx_lpi_timer;

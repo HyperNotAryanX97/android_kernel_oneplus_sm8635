@@ -167,6 +167,14 @@ config QCOM_PIL_INFO
 config QCOM_RPROC_COMMON
 	tristate "Qualcomm Technologies, Inc. Remote Proc Common Framework"
 
+config QCOM_Q6V5_PAS_SOCCP_V1
+	bool "SOCCP V1"
+	help
+	  Support to enable power state transition control of SoC Control Processor
+	  V1 via an API which can be used by clients to vote for the subsystem to
+	  be either in active or dormant states.
+	  If unsure say N.
+
 config QCOM_Q6V5_COMMON
 	tristate
 	depends on ARCH_QCOM
@@ -336,6 +344,18 @@ config RPROC_SYSMON_NOTIF_TIMEOUT
 	  the start and end of sysmon notifications, before a warning
 	  is emitted.
 
+config RPROC_SYSMON_SHUTDOWN_NOTIF_TIMEOUT
+	int "Sysmon notifications timeout in ms"
+	default 10000
+	help
+	  This is a debug feature where a kernel panic is triggered when
+	  there is no acknowledgment there from the subsystem shutdown
+	  request.
+
+	  The amount of time, in milliseconds, that should elapse between
+	  the start and end of sysmon notifications, before a warning
+	  is emitted.
+
 config RPROC_SSR_NOTIF_TIMEOUT
 	int "SSR notifier timeout in ms"
 	default 10000
@@ -417,6 +437,16 @@ config MSM_QUIN_SUBSYSTEM_NOTIF_VIRT
 	  The virtual MSM subsystem notif framework provides support for
 	  a subsystem to notify its clients of its state, when the clients
 	  are in a different virtual machine domain than the subsystem.
+
+config QCOM_CRASH_SYMBOL_MATCH
+	bool "Enable symbol matching for crash stack addresses"
+	default n
+	help
+	  Say Y here to enable symbol matching for crash stack addresses
+	  using a symbol map to convert raw addresses into readable symbols.
+
+	  If disabled, only raw stack addresses are printed.
+	  Helps improve clarity and debugging of crash logs.
 
 endif # REMOTEPROC
 

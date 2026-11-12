@@ -11,6 +11,7 @@
 
 /* #define VERBOSE_DEBUG */
 
+#include <linux/cleanup.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -107,6 +108,51 @@ static unsigned int bitrate(struct usb_gadget *g)
 #define RNDIS_STATUS_INTERVAL_MS	32
 #define STATUS_BYTECOUNT		8	/* 8 bytes data */
 
+#define USB_ETHERNET_CONFIGFS_ITEM_ATTR_WCEIS(_f_)			\
+	static ssize_t _f_##_opts_wceis_show(struct config_item *item,	\
+					     char *page)		\
+	{								\
+		struct f_##_f_##_opts *opts = to_f_##_f_##_opts(item);	\
+		bool wceis;						\
+									\
+		if (opts->bound == false) {				\
+			pr_err("Gadget function do not bind yet.\n");	\
+			return -ENODEV;					\
+		}							\
+									\
+		mutex_lock(&opts->lock);				\
+		wceis = opts->wceis;					\
+		mutex_unlock(&opts->lock);				\
+		return snprintf(page, PAGE_SIZE, "%d", wceis);		\
+	}								\
+									\
+	static ssize_t _f_##_opts_wceis_store(struct config_item *item, \
+					      const char *page, size_t len)\
+	{								\
+		struct f_##_f_##_opts *opts = to_f_##_f_##_opts(item);	\
+		bool wceis;						\
+		int ret;						\
+									\
+		if (opts->bound == false) {				\
+			pr_err("Gadget function do not bind yet.\n");	\
+			return -ENODEV;					\
+		}							\
+									\
+		mutex_lock(&opts->lock);				\
+									\
+		ret = kstrtobool(page, &wceis);				\
+		if (ret)						\
+			goto out;					\
+									\
+		opts->wceis = wceis;					\
+		ret = len;						\
+out:									\
+		mutex_unlock(&opts->lock);				\
+									\
+		return ret;						\
+	}								\
+									\
+	CONFIGFS_ATTR(_f_##_opts_, wceis)
 
 /* interface descriptor: */
 
@@ -691,9 +737,11 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 			return -ENOMEM;
 	}
 
-	rndis_iad_descriptor.bFunctionClass = rndis_opts->class;
-	rndis_iad_descriptor.bFunctionSubClass = rndis_opts->subclass;
-	rndis_iad_descriptor.bFunctionProtocol = rndis_opts->protocol;
+	scoped_guard(mutex, &rndis_opts->lock) {
+		rndis_iad_descriptor.bFunctionClass = rndis_opts->class;
+		rndis_iad_descriptor.bFunctionSubClass = rndis_opts->subclass;
+		rndis_iad_descriptor.bFunctionProtocol = rndis_opts->protocol;
+	}
 
 	/*
 	 * in drivers/usb/gadget/configfs.c:configfs_composite_bind()
@@ -735,6 +783,29 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 
 	rndis_data_intf.bInterfaceNumber = status;
 	rndis_union_desc.bSlaveInterface0 = status;
+
+	if (rndis_opts->wceis) {
+		/* "Wireless" RNDIS; auto-detected by Windows */
+		rndis_iad_descriptor.bFunctionClass =
+						USB_CLASS_WIRELESS_CONTROLLER;
+		rndis_iad_descriptor.bFunctionSubClass = 0x01;
+		rndis_iad_descriptor.bFunctionProtocol = 0x03;
+		rndis_control_intf.bInterfaceClass =
+						USB_CLASS_WIRELESS_CONTROLLER;
+		rndis_control_intf.bInterfaceSubClass =	 0x01;
+		rndis_control_intf.bInterfaceProtocol =	 0x03;
+	} else {
+		rndis_iad_descriptor.bFunctionClass = USB_CLASS_COMM;
+		rndis_iad_descriptor.bFunctionSubClass =
+						USB_CDC_SUBCLASS_ETHERNET;
+		rndis_iad_descriptor.bFunctionProtocol = USB_CDC_PROTO_NONE;
+		rndis_control_intf.bInterfaceClass = USB_CLASS_COMM;
+		rndis_control_intf.bInterfaceSubClass =	USB_CDC_SUBCLASS_ACM;
+		rndis_control_intf.bInterfaceProtocol =
+						USB_CDC_ACM_PROTO_VENDOR;
+	}
+
+	status = -ENODEV;
 
 	/* allocate instance-specific endpoints */
 	ep = usb_ep_autoconfig(cdev->gadget, &fs_in_desc);
@@ -863,6 +934,9 @@ USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, subclass);
 /* f_rndis_opts_protocol */
 USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, protocol);
 
+/* f_rndis_opts_wceis */
+USB_ETHERNET_CONFIGFS_ITEM_ATTR_WCEIS(rndis);
+
 static struct configfs_attribute *rndis_attrs[] = {
 	&rndis_opts_attr_dev_addr,
 	&rndis_opts_attr_host_addr,
@@ -871,6 +945,7 @@ static struct configfs_attribute *rndis_attrs[] = {
 	&rndis_opts_attr_class,
 	&rndis_opts_attr_subclass,
 	&rndis_opts_attr_protocol,
+	&rndis_opts_attr_wceis,
 	NULL,
 };
 
@@ -910,7 +985,7 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 
 	mutex_init(&opts->lock);
 	opts->func_inst.free_func_inst = rndis_free_inst;
-	opts->net = gether_setup_default();
+	opts->net = gether_setup_name_default("rndis");
 	if (IS_ERR(opts->net)) {
 		struct net_device *net = opts->net;
 		kfree(opts);
@@ -934,6 +1009,9 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 		return ERR_CAST(rndis_interf_group);
 	}
 	opts->rndis_interf_group = rndis_interf_group;
+
+	/* Enable "Wireless" RNDIS by default */
+	opts->wceis = true;
 
 	return &opts->func_inst;
 }

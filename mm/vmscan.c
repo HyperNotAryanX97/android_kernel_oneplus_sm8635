@@ -79,6 +79,9 @@
 #undef CREATE_TRACE_POINTS
 #include <trace/hooks/mm.h>
 
+#undef CREATE_TRACE_POINTS
+#include <trace/hooks/mm.h>
+
 EXPORT_TRACEPOINT_SYMBOL_GPL(mm_vmscan_direct_reclaim_begin);
 EXPORT_TRACEPOINT_SYMBOL_GPL(mm_vmscan_direct_reclaim_end);
 EXPORT_TRACEPOINT_SYMBOL_GPL(mm_vmscan_kswapd_wake);
@@ -1710,6 +1713,7 @@ retry:
 		unsigned int nr_pages;
 		bool activate = false;
 		bool keep = false;
+		bool bypass = false;
 
 		cond_resched();
 
@@ -2070,8 +2074,10 @@ retry:
 			case PAGE_SUCCESS:
 				stat->nr_pageout += nr_pages;
 
-				if (folio_test_writeback(folio))
+				if (folio_test_writeback(folio)) {
+					trace_android_vh_handle_folio_writeback(folio, &bypass);
 					goto keep;
+				}
 				if (folio_test_dirty(folio))
 					goto keep;
 
@@ -2210,7 +2216,8 @@ activate_locked:
 keep_locked:
 		folio_unlock(folio);
 keep:
-		list_add(&folio->lru, &ret_folios);
+		if (!bypass)
+			list_add(&folio->lru, &ret_folios);
 		VM_BUG_ON_FOLIO(folio_test_lru(folio) ||
 				folio_test_unevictable(folio), folio);
 	}
@@ -2889,7 +2896,6 @@ static void shrink_active_list(unsigned long nr_to_scan,
 				}
 			}
 		}
-
 		trace_android_vh_folio_trylock_clear(folio);
 skip_folio_referenced:
 		folio_clear_active(folio);	/* we are de-activating */
@@ -6646,6 +6652,11 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 #endif
 
 	blk_start_plug(&plug);
+
+	trace_android_vh_reclaim_before_kswapd(&nr_reclaimed);
+	if (nr_reclaimed >= nr_to_reclaim)
+		goto out;
+
 	while (nr[LRU_INACTIVE_ANON] || nr[LRU_ACTIVE_FILE] ||
 					nr[LRU_INACTIVE_FILE]) {
 		unsigned long nr_anon, nr_file, percentage;
@@ -6720,6 +6731,8 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 		nr[lru] = targets[lru] * (100 - percentage) / 100;
 		nr[lru] -= min(nr[lru], nr_scanned);
 	}
+
+out:
 	blk_finish_plug(&plug);
 	sc->nr_reclaimed += nr_reclaimed;
 

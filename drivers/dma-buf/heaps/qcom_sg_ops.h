@@ -8,7 +8,7 @@
  *	Andrew F. Davis <afd@ti.com>
  *
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _QCOM_SG_OPS_H
@@ -40,6 +40,8 @@ struct dma_heap_attachment {
 	struct list_head list;
 	bool mapped;
 };
+
+void qcom_sg_buffer_init(struct qcom_sg_buffer *buffer);
 
 int qcom_sg_attach(struct dma_buf *dmabuf,
 		   struct dma_buf_attachment *attachment);
@@ -78,7 +80,9 @@ int qcom_sg_vmap(struct dma_buf *dmabuf, struct iosys_map *map);
 
 void qcom_sg_vunmap(struct dma_buf *dmabuf, struct iosys_map *map);
 
-void qcom_sg_release(struct dma_buf *dmabuf);
+void qcom_sg_release(void *buffer);
+
+void qcom_sg_dmabuf_release(struct dma_buf *dmabuf);
 
 struct mem_buf_vmperm *qcom_sg_lookup_vmperm(struct dma_buf *dmabuf);
 

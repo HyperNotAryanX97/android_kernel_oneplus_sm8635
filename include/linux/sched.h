@@ -1556,11 +1556,6 @@ struct task_struct {
 #endif
 
 	ANDROID_KABI_USE(1, unsigned int saved_state);
-#ifdef CONFIG_SLIM_SCHED
-	ANDROID_KABI_USE(2, unsigned long sched_prop);
-	ANDROID_KABI_USE(3, struct sched_ext_entity *scx);
-	ANDROID_KABI_USE(4, struct task_dma_buf_info *dmabuf_info);
-#else
 	ANDROID_KABI_USE(2, struct task_dma_buf_info *dmabuf_info);
 	ANDROID_KABI_RESERVE(3);
 	ANDROID_KABI_RESERVE(4);

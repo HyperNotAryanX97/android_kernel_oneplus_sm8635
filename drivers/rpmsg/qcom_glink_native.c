@@ -284,13 +284,13 @@ static const struct rpmsg_endpoint_ops glink_endpoint_ops;
 #define GLINK_CMD_RX_DONE		6
 #define GLINK_CMD_RX_INTENT_REQ		7
 #define GLINK_CMD_RX_INTENT_REQ_ACK	8
-#define GLINK_CMD_TX_DATA_ZERO_COPY	10
 #define GLINK_CMD_TX_DATA		9
+#define GLINK_CMD_TX_DATA_ZERO_COPY	10
 #define GLINK_CMD_CLOSE_ACK		11
 #define GLINK_CMD_TX_DATA_CONT		12
 #define GLINK_CMD_READ_NOTIF		13
 #define GLINK_CMD_RX_DONE_W_REUSE	14
-#define GLINK_CMD_SIGNALS			15
+#define GLINK_CMD_SIGNALS		15
 
 #define GLINK_FEATURE_INTENTLESS	BIT(1)
 
@@ -631,7 +631,7 @@ static int qcom_glink_send_open_req(struct qcom_glink *glink,
 	req.msg.cmd = cpu_to_le16(GLINK_CMD_OPEN);
 	req.msg.param1 = cpu_to_le16(channel->lcid);
 	req.msg.param2 = cpu_to_le32(name_len);
-	strcpy(req.name, channel->name);
+	strscpy(req.name, channel->name, GLINK_NAME_SIZE);
 
 	ret = qcom_glink_tx(glink, &req, req_len, NULL, 0, true);
 	if (ret)
@@ -1631,7 +1631,7 @@ static irqreturn_t qcom_glink_native_intr(int irq, void *data)
 	struct qcom_glink *glink = data;
 	int ret;
 
-	ret = qcom_glink_native_rx(glink, 10);
+	ret = qcom_glink_native_rx(glink, 15);
 
 	return (ret) ? IRQ_WAKE_THREAD : IRQ_HANDLED;
 }
@@ -1639,8 +1639,11 @@ static irqreturn_t qcom_glink_native_intr(int irq, void *data)
 static irqreturn_t qcom_glink_native_thread_intr(int irq, void *data)
 {
 	struct qcom_glink *glink = data;
+	int ret;
 
-	qcom_glink_native_rx(glink, 0);
+	do {
+		ret = qcom_glink_native_rx(glink, 0);
+	} while (ret >= sizeof(struct glink_msg));
 
 	return IRQ_HANDLED;
 }
@@ -1829,6 +1832,7 @@ static void qcom_glink_destroy_ept(struct rpmsg_endpoint *ept)
 {
 	struct glink_channel *channel = to_glink_channel(ept);
 	struct qcom_glink *glink = channel->glink;
+	struct rpmsg_channel_info chinfo;
 	unsigned long flags;
 
 	spin_lock_irqsave(&channel->recv_lock, flags);
@@ -1838,6 +1842,16 @@ static void qcom_glink_destroy_ept(struct rpmsg_endpoint *ept)
 	}
 	channel->ept.cb = NULL;
 	spin_unlock_irqrestore(&channel->recv_lock, flags);
+
+	/* Decouple the potential rpdev from the channel */
+	if (channel->rpdev) {
+		strscpy_pad(chinfo.name, channel->name, sizeof(chinfo.name));
+		chinfo.src = RPMSG_ADDR_ANY;
+		chinfo.dst = RPMSG_ADDR_ANY;
+
+		rpmsg_unregister_device(glink->dev, &chinfo);
+	}
+	channel->rpdev = NULL;
 
 	qcom_glink_send_close_req(glink, channel);
 }
@@ -2543,7 +2557,7 @@ int qcom_glink_native_start(struct qcom_glink *glink)
 	ret = devm_request_threaded_irq(dev, irq,
 					qcom_glink_native_intr,
 					qcom_glink_native_thread_intr,
-					IRQF_NO_SUSPEND | IRQF_ONESHOT,
+					IRQF_NO_SUSPEND,
 					glink->irqname, glink);
 	if (ret) {
 		dev_err(dev, "failed to request IRQ with %d\n", ret);

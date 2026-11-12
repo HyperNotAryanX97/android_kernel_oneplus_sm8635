@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2021, Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "phy-qcom-ufs-i.h"
@@ -154,18 +154,18 @@ struct phy *ufs_qcom_phy_generic_probe(struct platform_device *pdev,
 		goto out;
 	}
 
-	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
-	if (IS_ERR(phy_provider)) {
-		err = PTR_ERR(phy_provider);
-		dev_err(dev, "%s: failed to register phy %d\n", __func__, err);
-		goto out;
-	}
-
 	generic_phy = devm_phy_create(dev, NULL, ufs_qcom_phy_gen_ops);
 	if (IS_ERR(generic_phy)) {
 		err =  PTR_ERR(generic_phy);
 		dev_err(dev, "%s: failed to create phy %d\n", __func__, err);
 		generic_phy = NULL;
+		goto out;
+	}
+
+	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
+	if (IS_ERR(phy_provider)) {
+		err = PTR_ERR(phy_provider);
+		dev_err(dev, "%s: failed to register phy %d\n", __func__, err);
 		goto out;
 	}
 
@@ -239,6 +239,12 @@ static int ufs_qcom_phy_clk_get(struct device *dev,
 int ufs_qcom_phy_init_clks(struct ufs_qcom_phy *phy_common)
 {
 	int err;
+
+	if (!phy_common) {
+		pr_err("%s: Defering the probe: Failed to get the required phy handle!!\n",
+			__func__);
+		return -EPROBE_DEFER;
+	}
 
 	if (of_device_is_compatible(phy_common->dev->of_node,
 				"qcom,msm8996-ufs-phy-qmp-14nm"))

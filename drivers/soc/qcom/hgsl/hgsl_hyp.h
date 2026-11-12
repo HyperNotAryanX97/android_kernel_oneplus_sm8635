@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef GSL_HYP_INCLUDED
@@ -162,6 +162,10 @@ enum gsl_rpc_func_t {
 	RPC_COMMAND_RESETSTATUS,
 	RPC_CONTEXT_QUERY_DBCQ,
 	RPC_CONTEXT_REGISTER_DBCQ,
+	RPC_GSLPROFILER_PER_PROC_GPU_BUSY,
+	RPC_GSLPROFILER_PER_PROC_GPU_PMEM,
+	RPC_DEVICE_GETFEATURES,
+	RPC_DEVICE_ACTIVATE,
 	RPC_FUNC_LAST /* insert new func BEFORE this line! */
 };
 
@@ -432,6 +436,15 @@ struct context_create_params_v1_t {
 	uint32_t                          dbq_off;
 };
 
+struct gslprofiler_per_proc_gpu_busy_params {
+	uint32_t                size;
+	uint32_t                sampling_time;
+};
+
+struct gslprofiler_per_proc_gpu_pmem_params {
+	uint32_t                size;
+};
+
 #pragma pack(pop)
 
 struct hgsl_hab_channel_t {
@@ -553,7 +566,7 @@ int hgsl_hyp_notify_cleanup(struct hgsl_hab_channel_t *hab_channel, uint32_t tim
 
 int hgsl_hyp_query_dbcq(struct hgsl_hab_channel_t *hab_channel, uint32_t devhandle,
 	uint32_t ctxthandle, uint32_t length, uint32_t *db_signal, uint32_t *queue_gmuaddr,
-	uint32_t *irq_idx);
+	uint32_t *irq_bit_idx);
 
 int hgsl_hyp_context_register_dbcq(struct hgsl_hab_channel_t *hab_channel,
 	uint32_t devhandle, uint32_t ctxthandle, struct dma_buf *dma_buf, uint32_t size,
@@ -565,4 +578,12 @@ int hgsl_hyp_ctxt_create_v1(struct device *dev,
 			struct hgsl_context *ctxt,
 			struct hgsl_ioctl_ctxt_create_params *hgsl_params,
 			int dbq_off, uint32_t *dbq_info);
+
+int hgsl_hyp_gslprofiler_per_proc_gpu_busy(struct hgsl_hyp_priv_t *priv,
+		struct hgsl_ioctl_gslprofiler_per_proc_gpu_busy_params *hgsl_param,
+		struct gsl_profiler_get_per_proc_gpu_busy_percentage_t *busy);
+
+int hgsl_hyp_gslprofiler_per_proc_gpu_pmem(struct hgsl_hyp_priv_t *priv,
+		struct hgsl_ioctl_gslprofiler_per_proc_gpu_pmem_params *hgsl_param,
+		struct gsl_profiler_get_per_proc_gpu_pmem_usage_t *pmem);
 #endif

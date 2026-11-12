@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * QTI TEE shared memory bridge driver
- *
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
+
+#define pr_fmt(fmt)	"qtee_shmbridge: [%s][%d]:" fmt, __func__, __LINE__
 
 #include <linux/module.h>
 #include <linux/device.h>
@@ -168,6 +168,23 @@ static void qtee_shmbridge_list_del_locked(uint64_t handle)
 			kfree(entry);
 			break;
 		}
+	}
+}
+
+/*
+ * qtee_shmbridge_list_clean_locked - remove and free every entry in the list.
+ *
+ * Must be called with bridge_list_head.lock held.
+ * Used during hibernate restore/thaw to discard all stale handles before
+ * re-registering bridges with TZ.
+ */
+static void qtee_shmbridge_list_clean_locked(void)
+{
+	struct bridge_list_entry *entry, *tmp;
+
+	list_for_each_entry_safe(entry, tmp, &bridge_list_head.head, list) {
+		list_del(&entry->list);
+		kfree(entry);
 	}
 }
 
@@ -337,7 +354,7 @@ int32_t qtee_shmbridge_register(
 	ipfn_and_s_perm_flags = UPDATE_IPFN_AND_S_PERM_FLAGS(paddr, tz_perm);
 	size_and_flags = UPDATE_SIZE_AND_FLAGS(size, ns_vmid_num);
 
-	if (support_hyp) {
+	if (support_hyp && (ns_vmid_num == 0)) {
 		size_and_flags |= SELF_OWNER_BIT << 1;
 		size_and_flags |= (VM_PERM_R | VM_PERM_W) << 2;
 	}
@@ -412,6 +429,12 @@ int32_t qtee_shmbridge_allocate_shm(size_t size, struct qtee_shm *shm)
 		goto exit;
 	}
 
+	if (!default_bridge.genpool) {
+		pr_err("Shmbridge pool not available!\n");
+		ret = -ENOMEM;
+		goto exit;
+	}
+
 	size = roundup(size, 1 << default_bridge.min_alloc_order);
 
 	va = gen_pool_alloc(default_bridge.genpool, size);
@@ -427,7 +450,7 @@ int32_t qtee_shmbridge_allocate_shm(size_t size, struct qtee_shm *shm)
 	shm->size = size;
 
 	pr_debug("%s: shm->paddr %llx, size %zu\n",
-			__func__, (uint64_t)shm->paddr, shm->size);
+		__func__, (uint64_t)shm->paddr, shm->size);
 
 exit:
 	return ret;
@@ -464,25 +487,64 @@ void qtee_shmbridge_inv_shm_buf(struct qtee_shm *shm)
 EXPORT_SYMBOL(qtee_shmbridge_inv_shm_buf);
 
 /*
+ * shmbridge_register_v2
+ */
+static int qtee_shmbridge_register_v2(void)
+{
+	int ret = 0;
+	int mem_protection_enabled = 0;
+	uint32_t ns_vm_ids_hlos[] = {VMID_HLOS};
+	uint32_t ns_vm_ids_hyp[] = {};
+	uint32_t ns_vm_perms[] = {VM_PERM_R|VM_PERM_W};
+	uint32_t *ns_vm_ids;
+
+	if (default_bridge.vaddr == NULL)
+		goto out;
+	ret = qtee_shmbridge_enable(true);
+	if (ret) {
+		pr_warn("shmbridge enable failed during register_v2 ret=%d\n", ret);
+		ret = 0;
+		goto out;
+	}
+
+	if (support_hyp) {
+		ns_vm_ids = ns_vm_ids_hyp;
+		ret = qtee_shmbridge_register(default_bridge.paddr,
+			default_bridge.size, ns_vm_ids,
+			ns_vm_perms, 0, VM_PERM_R | VM_PERM_W,
+			&default_bridge.handle);
+	} else {
+		ns_vm_ids = ns_vm_ids_hlos;
+		ret = qtee_shmbridge_register(default_bridge.paddr,
+			default_bridge.size, ns_vm_ids,
+			ns_vm_perms, 1, VM_PERM_R | VM_PERM_W,
+			&default_bridge.handle);
+	}
+
+	if (ret) {
+		pr_err("Failed to register default bridge, ret=%d\n", ret);
+		goto out;
+	}
+	mem_protection_enabled = scm_mem_protection_init_do();
+	pr_debug("MEM protection %s, %d\n",
+		(!mem_protection_enabled ? "Enabled" : "Not enabled"),
+		mem_protection_enabled);
+out:
+	return ret;
+}
+
+/*
  * shared memory bridge initialization
  *
  */
+
 static int qtee_shmbridge_init(struct platform_device *pdev)
 {
 	int ret = 0;
 	uint32_t custom_bridge_size;
-	uint32_t *ns_vm_ids;
-	uint32_t ns_vm_ids_hlos[] = {VMID_HLOS};
-	uint32_t ns_vm_ids_hyp[] = {};
-	uint32_t ns_vm_perms[] = {VM_PERM_R|VM_PERM_W};
-	int mem_protection_enabled = 0;
 
 	support_hyp = of_property_read_bool((&pdev->dev)->of_node,
 			"qcom,support-hypervisor");
-	if (support_hyp)
-		ns_vm_ids = ns_vm_ids_hyp;
-	else
-		ns_vm_ids = ns_vm_ids_hlos;
 
 	if (default_bridge.vaddr) {
 		pr_err("qtee shmbridge is already initialized\n");
@@ -496,7 +558,7 @@ static int qtee_shmbridge_init(struct platform_device *pdev)
 	else
 		default_bridge.size = custom_bridge_size * MIN_BRIDGE_SIZE;
 
-	pr_err("qtee shmbridge registered default bridge with size %d bytes\n",
+	pr_debug("qtee shmbridge registered default bridge with size %d bytes\n",
 		default_bridge.size);
 
 	default_bridge.vaddr = (void *)__get_free_pages(GFP_KERNEL|__GFP_COMP,
@@ -536,39 +598,15 @@ static int qtee_shmbridge_init(struct platform_device *pdev)
 	mutex_init(&bridge_list_head.lock);
 	INIT_LIST_HEAD(&bridge_list_head.head);
 
-	/* temporarily disable shm bridge mechanism */
-	ret = qtee_shmbridge_enable(true);
-	if (ret) {
-		/* keep the mem pool and return if failed to enable bridge */
-		ret = 0;
-		goto exit;
-	}
-
 	/*register default bridge*/
-	if (support_hyp)
-		ret = qtee_shmbridge_register(default_bridge.paddr,
-			default_bridge.size, ns_vm_ids,
-			ns_vm_perms, 0, VM_PERM_R|VM_PERM_W,
-			&default_bridge.handle);
-	else
-		ret = qtee_shmbridge_register(default_bridge.paddr,
-			default_bridge.size, ns_vm_ids,
-			ns_vm_perms, 1, VM_PERM_R|VM_PERM_W,
-			&default_bridge.handle);
-
+	ret = qtee_shmbridge_register_v2();
 	if (ret) {
-		pr_err("Failed to register default bridge, size %zu\n",
-			default_bridge.size);
 		goto exit_deregister_default_bridge;
 	}
 
-	pr_debug("qtee shmbridge registered default bridge with size %d bytes\n",
-			default_bridge.size);
+	pr_info("shmbridge registered default bridge with size %zu bytes, paddr: %llx\n",
+			default_bridge.size, (uint64_t)default_bridge.paddr);
 
-	mem_protection_enabled = scm_mem_protection_init_do();
-	pr_err("MEM protection %s, %d\n",
-			(!mem_protection_enabled ? "Enabled" : "Not enabled"),
-			mem_protection_enabled);
 	return 0;
 
 exit_deregister_default_bridge:
@@ -576,33 +614,99 @@ exit_deregister_default_bridge:
 	qtee_shmbridge_enable(false);
 exit_destroy_pool:
 	gen_pool_destroy(default_bridge.genpool);
+	default_bridge.genpool = NULL;
 exit_unmap:
 	dma_unmap_single(&pdev->dev, default_bridge.paddr, default_bridge.size,
 			DMA_TO_DEVICE);
 exit_freebuf:
 	free_pages((long)default_bridge.vaddr, get_order(default_bridge.size));
 	default_bridge.vaddr = NULL;
-exit:
+
 	return ret;
 }
 
 static int qtee_shmbridge_probe(struct platform_device *pdev)
 {
 #ifdef CONFIG_ARM64
-	dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
+	int ret = 0;
+
+	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret < 0)
+		pr_err("Failed to set mask, ret:%d\n", ret);
 #endif
 	return qtee_shmbridge_init(pdev);
 }
 
 static int qtee_shmbridge_remove(struct platform_device *pdev)
 {
-	qtee_shmbridge_deregister(default_bridge.handle);
+	int ret = 0;
+
+	ret = qtee_shmbridge_deregister(default_bridge.handle);
+	if (ret < 0)
+		pr_err("shmbridge deregisteration fails, ret: %d\n", ret);
+	ret = qtee_shmbridge_enable(false);
+	if (ret < 0)
+		pr_err("Disabling shmbridge fails, ret: %d\n", ret);
 	gen_pool_destroy(default_bridge.genpool);
+	default_bridge.genpool = NULL;
 	dma_unmap_single(&pdev->dev, default_bridge.paddr, default_bridge.size,
 			DMA_TO_DEVICE);
 	free_pages((long)default_bridge.vaddr, get_order(default_bridge.size));
+	default_bridge.vaddr = NULL;
 	return 0;
 }
+
+#ifdef CONFIG_PM
+
+static int qtee_shmbridge_freeze(struct device *dev)
+{
+	pr_debug("shmbridge: Freeze entry\n");
+
+	qtee_shmbridge_enabled = false;
+
+	pr_debug("shmbridge: Freeze Completed.\n");
+	return 0;
+}
+
+static int qtee_shmbridge_restore(struct device *dev)
+{
+	int ret = 0;
+
+	pr_debug("shmbridge: Restore entry\n");
+
+	mutex_lock(&bridge_list_head.lock);
+	qtee_shmbridge_list_clean_locked();
+	mutex_unlock(&bridge_list_head.lock);
+
+	ret = qtee_shmbridge_register_v2();
+	if (ret < 0)
+		pr_err("Restore: shmbridge register_v2 failed, ret = %d\n", ret);
+
+	pr_debug("shmbridge: Restore completed.\n");
+	return 0;
+}
+
+static int qtee_shmbridge_thaw(struct device *dev)
+{
+	pr_debug("shmbridge: Thaw entry\n");
+
+	qtee_shmbridge_enabled = false;
+
+	pr_debug("shmbridge: Thaw completed\n");
+	return 0;
+}
+
+static const struct dev_pm_ops qtee_shmbridge_pmops = {
+	.freeze_late = qtee_shmbridge_freeze,
+	.restore_early = qtee_shmbridge_restore,
+	.thaw_early = qtee_shmbridge_thaw,
+};
+
+#define QTEE_SHMBRIDGE_PMOPS (&qtee_shmbridge_pmops)
+
+#else
+#define QTEE_SHMBRIDGE_PMOPS NULL
+#endif
 
 static const struct of_device_id qtee_shmbridge_of_match[] = {
 	{ .compatible = "qcom,tee-shared-memory-bridge"},
@@ -616,6 +720,7 @@ static struct platform_driver qtee_shmbridge_driver = {
 	.driver = {
 		.name = "shared_memory_bridge",
 		.of_match_table = qtee_shmbridge_of_match,
+		.pm = QTEE_SHMBRIDGE_PMOPS,
 	},
 };
 

@@ -21,6 +21,20 @@
 #include "stmmac.h"
 #include "stmmac_platform.h"
 
+static int phytype = -1;
+
+/**
+ * stmmac_set_phytype - sets the phytype
+ * @p_type: Phy type argument obtained from kernel params
+ * Description: this function assigns phy type such as 1G and 2.5G
+ * based on the params obtained from the kernel param i.e., enet
+ */
+void stmmac_set_phytype(int p_type)
+{
+	phytype = p_type;
+}
+EXPORT_SYMBOL_GPL(stmmac_set_phytype);
+
 #ifdef CONFIG_OF
 
 /**
@@ -765,14 +779,6 @@ int stmmac_get_platform_resources(struct platform_device *pdev,
 			return -EPROBE_DEFER;
 		dev_info(&pdev->dev, "IRQ eth_wake_irq not found\n");
 		stmmac_res->wol_irq = stmmac_res->irq;
-	}
-
-	stmmac_res->lpi_irq =
-		platform_get_irq_byname_optional(pdev, "eth_lpi");
-	if (stmmac_res->lpi_irq < 0) {
-		if (stmmac_res->lpi_irq == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
-		dev_info(&pdev->dev, "IRQ eth_lpi not found\n");
 	}
 
 	stmmac_res->addr = devm_platform_ioremap_resource(pdev, 0);

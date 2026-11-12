@@ -690,10 +690,6 @@ static void verity_work(struct work_struct *w)
 	verity_finish_io(io, errno_to_blk_status(verity_verify_io(io)));
 }
 
-#ifdef CONFIG_BLOCKIO_UX_OPT
-unsigned long queue_work_ux = 0;
-#endif
-
 static void verity_end_io(struct bio *bio)
 {
 	struct dm_verity_io *io = bio->bi_private;
@@ -704,9 +700,7 @@ static void verity_end_io(struct bio *bio)
 		verity_finish_io(io, bio->bi_status);
 		return;
 	}
-#ifdef CONFIG_BLOCKIO_UX_OPT
-		queue_work_ux++;
-#endif
+
 	INIT_WORK(&io->work, verity_work);
 	queue_work(io->v->verify_wq, &io->work);
 }

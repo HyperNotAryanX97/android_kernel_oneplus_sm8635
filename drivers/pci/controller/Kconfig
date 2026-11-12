@@ -358,6 +358,33 @@ config PCI_MSM
 
 	  If unsure, say N.
 
+config PCI_PRSNT_HP
+	tristate "PCI Hotplug driver using PRSNT# signal"
+	depends on PCI_MSM
+	depends on GPIOLIB
+	depends on OF
+	help
+	  Say Y here if you want to enable support for a custom PCI hotplug driver
+	  that uses the PRSNT# signal for device presence detection. This driver
+	  monitors the PRSNT# signal to detect insertion and removal of PCI devices
+	  and handles hotplug events accordingly.
+
+	  If unsure, say N.
+
+config PCIE_QCOM_ECAM
+	tristate "QCOM PCIe ECAM host controller"
+	depends on ARCH_QCOM && PCI
+	depends on OF
+	select PCI_MSI
+	select PCI_HOST_COMMON
+	select IRQ_DOMAIN
+	help
+	  Say Y here if you want to use ECAM shift mode compatible PCIe
+	  root host controller. The controller is programmed using firmware
+	  to support ECAM compatible memory address space.
+
+	  If unsure, say N.
+
 source "drivers/pci/controller/dwc/Kconfig"
 source "drivers/pci/controller/mobiveil/Kconfig"
 source "drivers/pci/controller/cadence/Kconfig"

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __MSM_GPI_H_
@@ -124,17 +124,21 @@ enum msm_gpi_tre_type {
 	(ieob << 8) | ch)
 
 /* SPI Go TRE */
-#define MSM_GPI_SPI_GO_TRE_DWORD0(flags, cs, command) ((flags << 24) | \
-	(cs << 8) | command)
+#define MSM_GPI_SPI_GO_TRE_DWORD0(flags, cs, command) (((flags) << 24) | \
+	((cs) << 8) | (command))
 #define MSM_GPI_SPI_GO_TRE_DWORD1 (0)
 #define MSM_GPI_SPI_GO_TRE_DWORD2(rx_len) (rx_len)
 #define MSM_GPI_SPI_GO_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x2 << 20) | \
 	(0x0 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
 	(ieob << 8) | ch)
 
+/* QSPI Go TRE */
+#define MSM_GPI_QSPI_GO_TRE_DWORD0(flags, cs, command) (((flags) << 20) | \
+	((cs) << 8) | (command))
+
 /* SPI Config0 TRE */
-#define MSM_GPI_SPI_CONFIG0_TRE_DWORD0(pack, flags, word_size) ((pack << 24) | \
-	(flags << 8) | word_size)
+#define MSM_GPI_SPI_CONFIG0_TRE_DWORD0(pack, flags, word_size, dummy_clk_cnt) (((pack) << 24) | \
+	((flags) << 8) | (word_size) | ((dummy_clk_cnt) << 14))
 #define MSM_GPI_SPI_CONFIG0_TRE_DWORD1(it_del, cs_clk_del, iw_del) \
 	((it_del << 16) | (cs_clk_del << 8) | iw_del)
 #define MSM_GPI_SPI_CONFIG0_TRE_DWORD2(clk_src, clk_div) ((clk_src << 16) | \
@@ -254,6 +258,12 @@ enum msm_gpi_ctrl_cmd {
 	MSM_GPI_DEEP_SLEEP_INIT,
 };
 
+enum Q2SPI_CR_HEADER_CODE {
+	Q2SPI_CR_CODE_SUCCESS = 0x1,
+	Q2SPI_CR_HEADER_LEN_ZERO = 0xB,
+	Q2SPI_CR_HEADER_INCORRECT = 0xC,
+};
+
 enum msm_gpi_cb_event {
 	/* These events are hardware generated events */
 	MSM_GPI_QUP_NOTIFY,
@@ -369,6 +379,7 @@ struct gsi_tre_queue {
 	u32 msg_cnt;
 	u32 unmap_msg_cnt;
 	u32 freed_msg_cnt;
+	bool is_multi_descriptor;
 	dma_addr_t dma_buf[GSI_MAX_NUM_TRE_MSGS];
 	void *virt_buf[GSI_MAX_NUM_TRE_MSGS];
 	u32 len[GSI_MAX_NUM_TRE_MSGS];
@@ -397,7 +408,7 @@ struct gsi_common {
 	struct gsi_xfer_param rx;
 	void *ipc;
 	bool req_chan;
-	bool err; /* For every gsi error performing gsi reset */
+	bool *err; /* For every gsi error performing gsi reset */
 	int *protocol_err; /* protocol specific error*/
 	void (*ev_cb_fun)(struct dma_chan *ch, struct msm_gpi_cb const *cb_str, void *ptr);
 };
@@ -406,6 +417,14 @@ struct gsi_common {
  * whenever client met some scenario like timeout, error in GPI transfer mode.
  */
 void gpi_dump_for_geni(struct dma_chan *chan);
+
+/**
+ * gpi_q2spi_terminate_all() - function to stop and restart the channels
+ * @chan: gsi dma channel handle
+ *
+ * Return: Returns success or failure
+ */
+int gpi_q2spi_terminate_all(struct dma_chan *chan);
 
 /**
  * gpi_update_multi_desc_flag() - update multi descriptor flag and num of msgs for
@@ -455,6 +474,14 @@ int gsi_common_tx_tre_optimization(struct gsi_common *gsi, u32 num_xfers, u32 nu
  * Return: Returns success or failure
  */
 int geni_gsi_ch_start(struct dma_chan *chan);
+
+/**
+ * geni_gsi_connect_doorbell() - function to connect gsi doorbell
+ * @chan: dma channel handle
+ *
+ * Return: Returns success or failure
+ */
+int geni_gsi_connect_doorbell(struct dma_chan *chan);
 
 /**
  * geni_gsi_disconnect_doorbell_stop_ch() - function to disconnect gsi doorbell and stop channel

@@ -1,6 +1,6 @@
-load(":target_variants.bzl", "la_variants")
-load(":msm_kernel_la.bzl", "define_msm_la")
 load(":image_opts.bzl", "boot_image_opts")
+load(":msm_kernel_la.bzl", "define_msm_la")
+load(":target_variants.bzl", "la_variants")
 
 target_name = "autogvm"
 
@@ -24,6 +24,7 @@ def define_autogvm():
         "drivers/crypto/qcom-rng.ko",
         "drivers/dma-buf/heaps/qcom_dma_heaps.ko",
         "drivers/extcon/extcon-usb-gpio.ko",
+        "drivers/firmware/arm_scmi/scmi_pm_domain.ko",
         "drivers/firmware/qcom-scm.ko",
         "drivers/firmware/qcom_scm_hab.ko",
         "drivers/i2c/busses/i2c-msm-geni.ko",
@@ -37,9 +38,10 @@ def define_autogvm():
         "drivers/irqchip/qcom-pdc.ko",
         "drivers/mailbox/msm_qmp.ko",
         "drivers/mailbox/qcom-ipcc.ko",
-        "drivers/md/dm-bow.ko",
         "drivers/media/platform/msm/npu/virtio_npu.ko",
         "drivers/mfd/qcom-spmi-pmic.ko",
+        "drivers/misc/bootmarker_proxy.ko",
+        "drivers/misc/open-dice.ko",
         "drivers/misc/qseecom_proxy.ko",
         "drivers/mmc/host/cqhci.ko",
         "drivers/mmc/host/sdhci-msm.ko",
@@ -54,9 +56,16 @@ def define_autogvm():
         "drivers/net/mdio/mdio-mux.ko",
         "drivers/net/net_failover.ko",
         "drivers/net/pcs/pcs_xpcs.ko",
+        "drivers/net/phy/aquantia.ko",
         "drivers/net/phy/marvell.ko",
         "drivers/net/virtio_net.ko",
         "drivers/pci/controller/pci-msm-drv.ko",
+        "drivers/phy/qualcomm/phy-qcom-qmp-combo.ko",
+        "drivers/phy/qualcomm/phy-qcom-qmp-pcie.ko",
+        "drivers/phy/qualcomm/phy-qcom-qmp-pcie-msm8996.ko",
+        "drivers/phy/qualcomm/phy-qcom-qmp-ufs.ko",
+        "drivers/phy/qualcomm/phy-qcom-qmp-usb.ko",
+        "drivers/phy/qualcomm/phy-qcom-snps-femto-v2.ko",
         "drivers/phy/qualcomm/phy-qcom-ufs.ko",
         "drivers/phy/qualcomm/phy-qcom-ufs-qmp-v4.ko",
         "drivers/phy/qualcomm/phy-qcom-ufs-qmp-v4-lahaina.ko",
@@ -65,13 +74,14 @@ def define_autogvm():
         "drivers/pinctrl/qcom/pinctrl-lemans.ko",
         "drivers/pinctrl/qcom/pinctrl-monaco_auto.ko",
         "drivers/pinctrl/qcom/pinctrl-msm.ko",
+        "drivers/pinctrl/qcom/pinctrl-sa8797p.ko",
         "drivers/pinctrl/qcom/pinctrl-sdmshrike.ko",
+        "drivers/pinctrl/qcom/pinctrl-slpi.ko",
         "drivers/pinctrl/qcom/pinctrl-sm6150.ko",
         "drivers/pinctrl/qcom/pinctrl-sm8150.ko",
         "drivers/pinctrl/qcom/pinctrl-spmi-gpio.ko",
         "drivers/pinctrl/qcom/pinctrl-spmi-mpp.ko",
         "drivers/power/reset/msm-vm-poweroff.ko",
-        "drivers/regulator/debug-regulator.ko",
         "drivers/regulator/stub-regulator.ko",
         "drivers/regulator/virtio_regulator.ko",
         "drivers/remoteproc/rproc_qcom_common.ko",
@@ -108,13 +118,14 @@ def define_autogvm():
         "drivers/ufs/host/ufs_qcom.ko",
         "drivers/uio/msm_sharedmem/msm_sharedmem.ko",
         "drivers/usb/dwc3/dwc3-msm.ko",
+        "drivers/usb/dwc3/dwc3-qcom-mp.ko",
         "drivers/usb/gadget/function/usb_f_cdev.ko",
-        "drivers/usb/gadget/function/usb_f_diag.ko",
         "drivers/usb/gadget/function/usb_f_qdss.ko",
         "drivers/usb/misc/ehset.ko",
         "drivers/usb/phy/phy-generic.ko",
         "drivers/usb/phy/phy-msm-qusb.ko",
         "drivers/usb/phy/phy-msm-qusb-v2.ko",
+        "drivers/usb/phy/phy-msm-snps-eusb2.ko",
         "drivers/usb/phy/phy-msm-snps-hs.ko",
         "drivers/usb/phy/phy-msm-ssusb-qmp.ko",
         "drivers/usb/phy/phy-qcom-emu.ko",
@@ -128,6 +139,7 @@ def define_autogvm():
         "net/qrtr/qrtr.ko",
         "net/qrtr/qrtr-mhi.ko",
         "net/wireless/cfg80211.ko",
+        "sound/usb/snd-usb-audio-qmi.ko",
     ]
 
     _autogvm_consolidate_in_tree_modules = _autogvm_in_tree_modules + [

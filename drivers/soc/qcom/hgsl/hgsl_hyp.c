@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "hgsl.h"
@@ -112,6 +112,10 @@ static const char * const gsl_rpc_func_names[] = {
 	"RPC_COMMAND_RESETSTATUS",
 	"RPC_CONTEXT_QUERY_DBCQ",
 	"RPC_CONTEXT_REGISTER_DBCQ",
+	"RPC_GSLPROFILER_PER_PROC_GPU_BUSY",
+	"RPC_GSLPROFILER_PER_PROC_GPU_PMEM",
+	"RPC_DEVICE_GETFEATURES",
+	"RPC_DEVICE_ACTIVATE",
 	"RPC_FUNC_LAST" // insert new func BEFORE this line!
 };
 
@@ -513,6 +517,7 @@ static int hgsl_rpc_create_channel(
 	struct hgsl_hab_channel_t *hab_channel
 		= (struct hgsl_hab_channel_t *)hgsl_zalloc(
 					sizeof(struct hgsl_hab_channel_t));
+	bool first_handshake = false;
 
 	if (hab_channel == NULL) {
 		LOGE("Failed to allocate hab_channel");
@@ -545,10 +550,13 @@ static int hgsl_rpc_create_channel(
 		}
 		hab_channel->socket = socket;
 		ret = rpc_handshake(priv, hab_channel);
-		if (ret)
-			LOGE("rpc_handshake failed %d", ret);
 		gsl_hab_close(socket);
 		hab_channel->socket = HAB_INVALID_HANDLE;
+		if (unlikely(ret)) {
+			LOGE("rpc_handshake failed %d", ret);
+			goto out;
+		}
+		first_handshake = true;
 	}
 
 	ret = hgsl_rpc_connect(priv, &socket);
@@ -558,18 +566,27 @@ static int hgsl_rpc_create_channel(
 	}
 	hab_channel->socket = socket;
 	ret = rpc_sub_handshake(priv, hab_channel);
-	if (ret) {
+	if (unlikely(ret)) {
 		LOGE("sub handshake failed %d", ret);
 		gsl_hab_close(socket);
 		hab_channel->socket = HAB_INVALID_HANDLE;
 	}
 
 out:
-	if (ret) {
+	if (unlikely(ret)) {
 		LOGE("Failed to create channel %d exiting", ret);
 		if (hab_channel != NULL) {
 			hgsl_hyp_close_channel(hab_channel);
 			hab_channel = NULL;
+		}
+		if (first_handshake) {
+			/* The sub handshake may failed due to the overhead
+			 * of hab transition between GVM and PVM, we shall
+			 * reset conn_id and overwrite errno to EAGAIN, let
+			 * userspace retry to create hab channel again.
+			 */
+			priv->conn_id = 0;
+			ret = -EAGAIN;
 		}
 	} else {
 		*channel = hab_channel;
@@ -2321,7 +2338,7 @@ out:
 
 int hgsl_hyp_query_dbcq(struct hgsl_hab_channel_t *hab_channel, uint32_t devhandle,
 	uint32_t ctxthandle, uint32_t length, uint32_t *db_signal, uint32_t *queue_gmuaddr,
-	uint32_t *irq_idx)
+	uint32_t *irq_bit_idx)
 {
 	struct query_dbcq_params_t rpc_params = { 0 };
 	struct gsl_hab_payload *send_buf = NULL;
@@ -2386,7 +2403,7 @@ int hgsl_hyp_query_dbcq(struct hgsl_hab_channel_t *hab_channel, uint32_t devhand
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = gsl_rpc_read_uint32_l(recv_buf, irq_idx);
+	ret = gsl_rpc_read_uint32_l(recv_buf, irq_bit_idx);
 	if (ret) {
 		LOGE("failed to read irq_idx, %d", ret);
 		ret = -EINVAL;
@@ -2606,7 +2623,7 @@ static int read_shadowts_mem_be(struct hgsl_hab_channel_t *hab_channel,
 	}
 
 	if (rpc_shadow.flags & GSL_FLAGS_INITIALIZED) {
-		mem_node = hgsl_mem_node_zalloc(hgsl->default_iocoherency);
+		mem_node = hgsl_mem_node_zalloc(hgsl->cache_flags);
 		if (mem_node == NULL) {
 			ret = -ENOMEM;
 			goto out;
@@ -2675,7 +2692,7 @@ int hgsl_hyp_ctxt_create_v1(struct device *dev,
 	}
 	recv_buf = &hab_channel->recv_buf;
 
-	mem_node = hgsl_mem_node_zalloc(hgsl->default_iocoherency);
+	mem_node = hgsl_mem_node_zalloc(hgsl->cache_flags);
 	if (mem_node == NULL) {
 		ret = -ENOMEM;
 		goto out;
@@ -2774,3 +2791,173 @@ out:
 	return ret;
 }
 
+int hgsl_hyp_gslprofiler_per_proc_gpu_busy(struct hgsl_hyp_priv_t *priv,
+	struct hgsl_ioctl_gslprofiler_per_proc_gpu_busy_params *hgsl_param,
+	struct gsl_profiler_get_per_proc_gpu_busy_percentage_t *busy)
+{
+	struct gslprofiler_per_proc_gpu_busy_params rpc_params = { 0 };
+	struct hgsl_hab_channel_t *hab_channel = NULL;
+	struct gsl_hab_payload *send_buf = NULL;
+	struct gsl_hab_payload *recv_buf = NULL;
+	int i = 0;
+	int ret = 0;
+	int rval = 0;
+	uint64_t double_tmp = 0; // Convert  uint_64_t to double
+
+	RPC_TRACE();
+	ret = hgsl_hyp_channel_pool_get(priv, hgsl_param->channel_id, &hab_channel);
+	if (ret) {
+		LOGE("Failed to get hab channel %d", ret);
+		goto out;
+	}
+
+	send_buf = &hab_channel->send_buf;
+	recv_buf = &hab_channel->recv_buf;
+
+	if (!hab_channel->wait_retry) {
+		hgsl_rpc_parcel_reset(hab_channel);
+		rpc_params.size              = sizeof(rpc_params);
+		rpc_params.sampling_time     = hgsl_param->sampling_time;
+
+		ret = gsl_rpc_write(send_buf, &rpc_params, sizeof(rpc_params));
+		if (ret) {
+			LOGE("gsl_rpc_write failed, %d", ret);
+			goto out;
+		}
+	}
+
+	ret = gsl_rpc_transact_interrruptible(RPC_GSLPROFILER_PER_PROC_GPU_BUSY, hab_channel);
+	if (ret == -EINTR) {
+		hgsl_param->channel_id = hab_channel->id;
+		return ret;
+	} else if (ret) {
+		LOGE("gsl_rpc_transact_interrruptible failed, %d", ret);
+		goto out;
+	}
+
+	ret = gsl_rpc_read_uint32_l(recv_buf, &busy->process_num);
+	if (ret) {
+		LOGE("gsl_rpc_read_uint32_l failed, %d", ret);
+		goto out;
+	}
+
+	for (i = 0; i < busy->process_num; i++) {
+		ret = gsl_rpc_read_uint32_l(recv_buf, &busy->process_id[i]);
+		if (ret) {
+			LOGE("gsl_rpc_read_uint32_l failed, %d", ret);
+			goto out;
+		}
+		ret = gsl_rpc_read(recv_buf, busy->process_name[i], sizeof(busy->process_name[i]));
+		if (ret) {
+			LOGE("gsl_rpc_read failed, %d", ret);
+			goto out;
+		}
+		ret = gsl_rpc_read_uint64_l(recv_buf, &double_tmp);
+		if (ret) {
+			LOGE("gsl_rpc_read_uint64_l failed, %d", ret);
+			goto out;
+		}
+		memcpy(&busy->busy_percentage[i], &double_tmp, sizeof(double));
+	}
+	ret = gsl_rpc_read_uint64_l(recv_buf, &busy->ts);
+	if (ret) {
+		LOGE("gsl_rpc_read_uint64_l failed, %d", ret);
+		goto out;
+	}
+	ret = gsl_rpc_read_int32_l(recv_buf, &rval);
+	if (ret) {
+		LOGE("gsl_rpc_read_int32_l failed, %d", ret);
+		goto out;
+	}
+
+	ret = rval;
+
+out:
+	hgsl_hyp_channel_pool_put(hab_channel);
+	RPC_TRACE_DONE();
+	return ret;
+}
+
+int hgsl_hyp_gslprofiler_per_proc_gpu_pmem(struct hgsl_hyp_priv_t *priv,
+	struct hgsl_ioctl_gslprofiler_per_proc_gpu_pmem_params *hgsl_param,
+	struct gsl_profiler_get_per_proc_gpu_pmem_usage_t *pmem)
+{
+	struct gslprofiler_per_proc_gpu_pmem_params rpc_params = { 0 };
+	struct hgsl_hab_channel_t *hab_channel = NULL;
+	struct gsl_hab_payload *send_buf = NULL;
+	struct gsl_hab_payload *recv_buf = NULL;
+	int i = 0;
+	int ret = 0;
+	int rval = 0;
+
+	RPC_TRACE();
+	ret = hgsl_hyp_channel_pool_get(priv, hgsl_param->channel_id, &hab_channel);
+	if (ret) {
+		LOGE("Failed to get hab channel %d", ret);
+		goto out;
+	}
+
+	send_buf = &hab_channel->send_buf;
+	recv_buf = &hab_channel->recv_buf;
+
+	if (!hab_channel->wait_retry) {
+		hgsl_rpc_parcel_reset(hab_channel);
+		rpc_params.size              = sizeof(rpc_params);
+		ret = gsl_rpc_write(send_buf, &rpc_params, sizeof(rpc_params));
+		if (ret) {
+			LOGE("gsl_rpc_write failed, %d", ret);
+			goto out;
+		}
+	}
+
+	ret = gsl_rpc_transact_interrruptible(RPC_GSLPROFILER_PER_PROC_GPU_PMEM, hab_channel);
+	if (ret == -EINTR) {
+		hgsl_param->channel_id = hab_channel->id;
+		return ret;
+	} else if (ret) {
+		LOGE("gsl_rpc_transact_interrruptible failed, %d", ret);
+		goto out;
+	}
+
+	ret = gsl_rpc_read_uint32_l(recv_buf, &pmem->process_num);
+	if (ret) {
+		LOGE("gsl_rpc_read_uint32_l failed, %d", ret);
+		goto out;
+	}
+
+	for (i = 0; i < pmem->process_num; i++) {
+		ret = gsl_rpc_read_uint32_l(recv_buf, &pmem->process_id[i]);
+		if (ret) {
+			LOGE("gsl_rpc_read_uint32_l failed, %d", ret);
+			goto out;
+		}
+		ret = gsl_rpc_read(recv_buf, pmem->process_name[i], sizeof(pmem->process_name[i]));
+		if (ret) {
+			LOGE("gsl_rpc_read failed, %d", ret);
+			goto out;
+		}
+		ret = gsl_rpc_read_uint32_l(recv_buf, &pmem->pmem_usage[i]);
+		if (ret) {
+			LOGE("gsl_rpc_read_uint64_l failed, %d", ret);
+			goto out;
+		}
+	}
+	ret = gsl_rpc_read_uint64_l(recv_buf, &pmem->ts);
+	if (ret) {
+		LOGE("gsl_rpc_read_uint64_l failed, %d", ret);
+		goto out;
+	}
+
+	ret = gsl_rpc_read_int32_l(recv_buf, &rval);
+	if (ret) {
+		LOGE("gsl_rpc_read_int32_l failed, %d", ret);
+		goto out;
+	}
+
+	ret = rval;
+
+out:
+	hgsl_hyp_channel_pool_put(hab_channel);
+	RPC_TRACE_DONE();
+	return ret;
+}

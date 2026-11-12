@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/syscore_ops.h>
@@ -1126,15 +1126,16 @@ static void migrate_busy_time_subtraction(struct task_struct *p, int new_cpu)
 	wallclock = walt_sched_clock();
 	walt_update_task_ravg(p, task_rq(p), TASK_MIGRATE, wallclock, 0);
 
+	/*
+	 * Update task's cycles wrt to the new cpu.
+	 */
+	wts->cpu_cycles = qcom_cpufreq_get_cpu_cycle_counter(new_cpu);
+
 	if (wts->window_start != src_wrq->window_start)
 		WALT_BUG(WALT_BUG_WALT, p,
 				"CPU%d: %s task %s(%d)'s ws=%llu not equal to src_rq %d's ws=%llu",
 				raw_smp_processor_id(), __func__, p->comm, p->pid,
 				wts->window_start, src_rq->cpu, src_wrq->window_start);
-
-
-	/* safe to update the task cyc cntr for new_cpu without the new_cpu rq_lock */
-	update_task_cpu_cycles(p, new_cpu, wallclock);
 
 	new_task = is_new_task(p);
 	/* Protected by rq_lock */
@@ -2647,6 +2648,7 @@ static struct walt_sched_cluster *alloc_new_cluster(const struct cpumask *cpus)
 	raw_spin_lock_init(&cluster->load_lock);
 	cluster->cpus			= *cpus;
 	cluster->found_ts		= 0;
+	cluster->sibling_cluster	= -1;
 
 	return cluster;
 }
@@ -5706,18 +5708,17 @@ static void walt_init_tg_pointers(void)
 	rcu_read_unlock();
 }
 
-static void walt_init_rq_diagnostics(void)
+static void walt_remove_cpufreq_efficiencies_available(void)
 {
-	int cpu;
-	struct rq_lock_diag *tmp;
+	struct cpufreq_policy *policy;
+	struct walt_sched_cluster *cluster;
 
-	for_each_possible_cpu(cpu) {
-		/* lock diagnostic init */
-		tmp = &walt_rq_lock_diag_data[cpu];
-		atomic_set(&tmp->last_cpu, -1);
-		atomic_set(&tmp->locked, 0);
-		tmp->owner_task = -1;
-		tmp->free_task = -1;
+	for_each_sched_cluster(cluster) {
+		policy = cpufreq_cpu_get(cluster_first_cpu(cluster));
+		if (policy) {
+			policy->efficiencies_available = false;
+			cpufreq_cpu_put(policy);
+		}
 	}
 }
 
@@ -5761,7 +5762,7 @@ static void walt_init(struct work_struct *work)
 		schedule_work(&rebuild_sd_work);
 		wait_for_completion_interruptible(&rebuild_domains_completion);
 	}
-
+	walt_remove_cpufreq_efficiencies_available();
 	stop_machine(walt_init_stop_handler, NULL, NULL);
 
 	/*

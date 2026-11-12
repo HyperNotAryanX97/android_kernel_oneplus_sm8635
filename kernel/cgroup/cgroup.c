@@ -2543,6 +2543,7 @@ static void cgroup_migrate_add_task(struct task_struct *task,
 
 	mgctx->tset.nr_tasks++;
 
+	css_set_skip_task_iters(cset, task);
 	list_move_tail(&task->cg_list, &cset->mg_tasks);
 	if (list_empty(&cset->mg_node))
 		list_add_tail(&cset->mg_node,
@@ -5533,17 +5534,8 @@ static void css_release(struct percpu_ref *ref)
 	struct cgroup_subsys_state *css =
 		container_of(ref, struct cgroup_subsys_state, refcnt);
 
-	unsigned long flags;
-
-	local_irq_save(flags);
-	if (!test_and_set_bit(WORK_STRUCT_PENDING_BIT,
-		work_data_bits(&css->destroy_work))) {
-		local_irq_restore(flags);
-		INIT_WORK(&css->destroy_work, css_release_work_fn);
-		queue_work(cgroup_release_wq, &css->destroy_work);
-	} else {
-		local_irq_restore(flags);
-	}
+	INIT_WORK(&css->destroy_work, css_release_work_fn);
+	queue_work(cgroup_release_wq, &css->destroy_work);
 }
 
 static void init_and_link_css(struct cgroup_subsys_state *css,

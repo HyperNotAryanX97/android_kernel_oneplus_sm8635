@@ -11,6 +11,7 @@
   blk_start_plug
   cgroup_add_dfl_cftypes
   cgroup_add_legacy_cftypes
+  cgroup_add_dfl_cftypes
   cpu_cgrp_subsys
   css_task_iter_end
   css_task_iter_next
@@ -215,6 +216,7 @@
   __traceiter_android_vh_alloc_pages_slowpath
   __traceiter_android_vh_sched_move_task
   __traceiter_android_vh_reweight_entity
+  __traceiter_android_vh_oom_evaluate_task_bypass
   __traceiter_android_vh_sched_stat_runtime_rt
   __traceiter_android_vh_shrink_node_memcgs
   __traceiter_android_vh_sync_txn_recvd
@@ -340,6 +342,10 @@
   __tracepoint_android_vh_shrink_node_memcgs
   __tracepoint_android_vh_sync_txn_recvd
   __tracepoint_android_vh_tune_swappiness
+  __tracepoint_android_vh_oom_evaluate_task_bypass
+  __tracepoint_android_vh_sched_stat_runtime_rt
+  __tracepoint_android_vh_shrink_node_memcgs
+  __tracepoint_android_vh_sync_txn_recvd
   __tracepoint_android_vh_set_tsk_need_resched_lazy
   __tracepoint_android_vh_task_blocks_on_rtmutex
   __tracepoint_android_vh_task_ux_op

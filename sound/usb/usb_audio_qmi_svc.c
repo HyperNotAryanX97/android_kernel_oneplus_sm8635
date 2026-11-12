@@ -903,10 +903,8 @@ static void uaudio_dev_intf_cleanup(struct usb_device *udev,
 
 	info->in_use = false;
 
-#ifdef OPLUS_FEATURE_CHG_BASIC /* CR#4006716 */
 	uaudio_dbg("release resources: intf# %d card# %d\n",
 			info->intf_num, info->pcm_card_num);
-#endif
 }
 
 static void uaudio_event_ring_cleanup_free(struct uaudio_dev *dev)
@@ -935,10 +933,6 @@ static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 		if (!dev->info[if_idx].in_use)
 			continue;
 		uaudio_dev_intf_cleanup(dev->udev, &dev->info[if_idx]);
-#ifndef OPLUS_FEATURE_CHG_BASIC /* CR#4006716 */
-		uaudio_dbg("release resources: intf# %d card# %d\n",
-				dev->info[if_idx].intf_num, dev->card_num);
-#endif
 	}
 
 	dev->num_intf = 0;
@@ -1247,16 +1241,22 @@ find_format_and_si(struct list_head *fmt_list_head, snd_pcm_format_t format,
 static void close_endpoints(struct snd_usb_audio *chip,
 			    struct snd_usb_substream *subs)
 {
+	mutex_lock(&chip->mutex);
 	if (subs->data_endpoint) {
 		subs->data_endpoint->sync_source = NULL;
+		mutex_unlock(&chip->mutex);
 		snd_usb_endpoint_close(chip, subs->data_endpoint);
+		mutex_lock(&chip->mutex);
 		subs->data_endpoint = NULL;
 	}
 
 	if (subs->sync_endpoint) {
+		mutex_unlock(&chip->mutex);
 		snd_usb_endpoint_close(chip, subs->sync_endpoint);
+		mutex_lock(&chip->mutex);
 		subs->sync_endpoint = NULL;
 	}
+	mutex_unlock(&chip->mutex);
 }
 
 static int configure_endpoints(struct snd_usb_audio *chip,
@@ -1575,9 +1575,7 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
 
 	if (!subs) {
 		uaudio_err("invalid substream\n");
-#ifdef OPLUS_FEATURE_CHG_BASIC
 		ret = -EINVAL;
-#endif
 		goto response;
 	}
 
@@ -1659,8 +1657,6 @@ response:
 			uaudio_dev_intf_cleanup(
 					uadev[pcm_card_num].udev,
 					info);
-			uaudio_dbg("release resources: intf# %d card# %d\n",
-					info->intf_num, pcm_card_num);
 		}
 		if (atomic_dec_and_test(&uadev[pcm_card_num].in_use))
 			uaudio_dev_release(&uadev[pcm_card_num]);

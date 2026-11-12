@@ -57,6 +57,16 @@ config DUMMY_IRQ
 	  The sole purpose of this module is to help with debugging of systems on
 	  which spurious IRQs would happen on disabled IRQ vector.
 
+config BHS_IRQ
+	tristate "BHS IPCC IRQ handler"
+	help
+	  This driver provides support for handling IRQs associated with the
+	  IPCC SMP2P and GLINK interfaces used in the BHS (Battery Hot Swap)
+	  subsystem. It is primarily used to retrieve and manage interrupt
+	  lines that need to be disabled or enabled during battery removal
+	  and insertion events. This ensures proper synchronization and
+	  communication between processors and subsystems during power transitions.
+
 config IBM_ASM
 	tristate "Device driver for IBM RSA service processor"
 	depends on X86 && PCI && INPUT
@@ -533,6 +543,72 @@ config OPLUS_POWER_PROCS_LOAD
       define this config to enable oplus power procs load feature.
 #endif /* OPLUS_POWER_PROCS_LOAD */
 
+config QCOM_SMCI_PROXY
+	tristate "To enable smci proxy driver for kernel client"
+	depends on !QCOM_SI_CORE
+	help
+	 smci proxy driver serves the kernel clients by providing
+	 required ops via call back functions with a minimal framework.
+	 These callback functions can be used to get client objects from
+	 Trusted firmware.
+
+config BOOTMARKER_PROXY
+	tristate "To enable Bootmarker proxy driver for kernel client"
+	help
+	  Bootmarker proxy driver serves the kernel clients by providing
+	  required ops via call back functions with a minimal framework.
+	  These callback functions can be used to access the place marker.
+	  To compile this driver as a module, choose M here.
+	  If unsure, say N.
+
+config KINECTICS_XR_NORDIC
+	tristate "Nordic Misc driver support in XR Reference devices"
+	help
+	   This driver supports Nordic Chip in XR Reference devices.
+	   This driver interfaces with SoC to Nordic chip over SPI and contains
+	   code to power up the Nordic chip and initializes SPI interface. Also,
+	   this also parses the gpios and interrupts from device tree and sets
+	   the gpios and interrupt handler for handling the interrupt.
+
+config USBMUX_PS8822
+        tristate "Parade PS8822 DP/USB Mux chip"
+        depends on I2C && OF
+	depends on USB_DWC3_MSM
+        select REGMAP_I2C
+        help
+          This driver provides mode switching support for the Parade
+          Technologies PS8822 Type-C DP/USB3.0 Mux/Redriver.
+
+          The PS8822 supports multiple operation modes including:
+          - USB3 only mode
+          - DisplayPort 4-lane mode
+          - USB3 2-lane + DisplayPort 2-lane mode (default)
+          - DisplayPort 2-lane mode
+
+          To compile this driver as a module, choose M here: the
+          module will be called usbmux_ps8822.
+
+          If unsure, say N.
+
+config CCI_UTIL
+	tristate "Lontium LT7911UXC DP to CSI Bridge chip driver"
+	help
+	   This driver powers up Lontium LT7911UXC bridge chip and handles the
+	   communication with the Lontium chip over i2c. In addition, the driver
+	   performs LT7911 firmware upgrade when a new version of the firmware
+	   is available.
+
+config LONTIUM_LT7911UXC
+        tristate "Lontium LT7911UXC DP to CSI Bridge chip driver"
+        help
+	  The driver manages the chip power sequence (VDD regulator,
+	  reset, 1.1 V and 3.3 V enable GPIOs), handles DP Alt-Mode
+	  connect/disconnect events from the Qualcomm altmode-glink
+	  framework, and routes stream-state change interrupts (GPIO0)
+	  to a drain-loop work queue that reads video/audio metadata
+	  over the camera CCI bus and notifies userspace via uevents.
+
+source "drivers/misc/rtimd-i2c/Kconfig"
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
@@ -548,6 +624,7 @@ source "drivers/misc/ocxl/Kconfig"
 source "drivers/misc/bcm-vk/Kconfig"
 source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/habanalabs/Kconfig"
+source "drivers/misc/isl97900_led/Kconfig"
 source "drivers/misc/uacce/Kconfig"
 source "drivers/misc/pvpanic/Kconfig"
 source "drivers/misc/mchp_pci1xxxx/Kconfig"
@@ -555,4 +632,5 @@ source "drivers/misc/vibrator/aw8697_haptic/Kconfig"
 source "drivers/misc/vibrator/si_haptic/Kconfig"
 source "drivers/misc/oplus_power_notifier/Kconfig"
 source "drivers/misc/vibrator/oplus_haptic/Kconfig"
+source "drivers/misc/vd628x/Kconfig"
 endmenu

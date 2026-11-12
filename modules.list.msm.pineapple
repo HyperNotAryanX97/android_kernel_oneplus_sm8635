@@ -7,6 +7,7 @@ qcom_scmi_client.ko
 cmd-db.ko
 qcom_rpmh.ko
 qcom-pdc.ko
+nvmem_qfprom.ko
 thermal_minidump.ko
 qcom_tsens.ko
 qcom_iommu_util.ko
@@ -60,6 +61,7 @@ gh_virt_wdt.ko
 gh_arm_drv.ko
 gh_cpusys_vm_mem_access.ko
 gh_dbl.ko
+gh_mem_notifier.ko
 gh_msgq.ko
 gh_rm_drv.ko
 gunyah.ko
@@ -148,3 +150,4 @@ oplus_uprobe.ko
 oplus_file_record.ko
 oplus_subsys_sleep_monitor.ko
 oplus_power_notifier.ko
+qcom-dload-mode.ko

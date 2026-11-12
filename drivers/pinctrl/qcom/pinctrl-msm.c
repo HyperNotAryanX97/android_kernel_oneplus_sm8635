@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2013, Sony Mobile Communications AB.
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/delay.h>
@@ -273,7 +273,7 @@ static int msm_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	 */
 	if (d && i != gpio_func &&
 	    !test_and_set_bit(d->hwirq, pctrl->disabled_for_mux))
-		disable_irq(irq);
+		disable_irq_nosync(irq);
 
 	raw_spin_lock_irqsave(&pctrl->lock, flags);
 
@@ -1838,27 +1838,10 @@ static int pinctrl_hibernation_notifier(struct notifier_block *nb,
 								unsigned long event, void *dummy)
 {
 	struct msm_pinctrl *pctrl = msm_pinctrl_data;
-	const struct msm_pinctrl_soc_data *soc = pctrl->soc;
 
 	if (event == PM_HIBERNATION_PREPARE) {
-		pctrl->gpio_regs = kcalloc(soc->ngroups,
-			sizeof(*pctrl->gpio_regs), GFP_KERNEL);
-		if (pctrl->gpio_regs == NULL)
-			return -ENOMEM;
-		if (soc->ntiles) {
-			pctrl->msm_tile_regs = kcalloc(soc->ntiles,
-				sizeof(*pctrl->msm_tile_regs), GFP_KERNEL);
-			if (pctrl->msm_tile_regs == NULL) {
-				kfree(pctrl->gpio_regs);
-				return -ENOMEM;
-			}
-		}
 		pctrl->hibernation = true;
 	} else if (event == PM_POST_HIBERNATION) {
-		kfree(pctrl->gpio_regs);
-		kfree(pctrl->msm_tile_regs);
-		pctrl->gpio_regs = NULL;
-		pctrl->msm_tile_regs = NULL;
 		pctrl->hibernation = false;
 	}
 	return NOTIFY_OK;
@@ -1873,11 +1856,27 @@ static int msm_pinctrl_hibernation_suspend(void)
 	const struct msm_pingroup *pgroup;
 	struct msm_pinctrl *pctrl = msm_pinctrl_data;
 	const struct msm_pinctrl_soc_data *soc = pctrl->soc;
+	struct gpio_chip *chip = &pctrl->chip;
 	void __iomem *tile_addr = NULL;
 	u32 i, j;
 
-	if (likely(!pctrl->hibernation))
+	if (likely(!pctrl->hibernation) && (pm_suspend_target_state != PM_SUSPEND_MEM ||
+						!IS_ENABLED(CONFIG_DEEPSLEEP)))
 		return 0;
+
+	pctrl->gpio_regs = kcalloc(soc->ngroups,
+		sizeof(*pctrl->gpio_regs), GFP_KERNEL);
+	if (!pctrl->gpio_regs)
+		return -ENOMEM;
+
+	if (soc->ntiles) {
+		pctrl->msm_tile_regs = kcalloc(soc->ntiles,
+			sizeof(*pctrl->msm_tile_regs), GFP_KERNEL);
+		if (!pctrl->msm_tile_regs) {
+			kfree(pctrl->gpio_regs);
+			return -ENOMEM;
+		}
+	}
 
     /* Save direction conn registers for hmss */
 
@@ -1896,6 +1895,9 @@ static int msm_pinctrl_hibernation_suspend(void)
 
 	/* All normal gpios will have common registers, first save them */
 	for (i = 0; i < soc->ngpios; i++) {
+		if (!chip && !test_bit(i, chip->valid_mask))
+			continue;
+
 		pgroup = &soc->groups[i];
 		pctrl->gpio_regs[i].ctl_reg =
 				msm_readl_ctl(pctrl, pgroup);
@@ -1912,6 +1914,9 @@ static int msm_pinctrl_hibernation_suspend(void)
 	}
 
 	for ( ; i < soc->ngroups; i++) {
+		if (!chip && !test_bit(i, chip->valid_mask))
+			continue;
+
 		pgroup = &soc->groups[i];
 		if (pgroup->ctl_reg)
 			pctrl->gpio_regs[i].ctl_reg =
@@ -1929,10 +1934,15 @@ static void msm_pinctrl_hibernation_resume(void)
 	const struct msm_pingroup *pgroup;
 	struct msm_pinctrl *pctrl = msm_pinctrl_data;
 	const struct msm_pinctrl_soc_data *soc = pctrl->soc;
+	struct gpio_chip *chip = &pctrl->chip;
 	void __iomem *tile_addr = NULL;
 
-	if (likely(!pctrl->hibernation) || !pctrl->gpio_regs || !pctrl->msm_tile_regs)
+	if (likely(!pctrl->hibernation) || !pctrl->gpio_regs)
 		return;
+
+	if (soc->ntiles && !pctrl->msm_tile_regs)
+		return;
+
 	for (i = 0; i < soc->ntiles; i++) {
 		if (soc->tiles)
 			tile_addr = pctrl->regs[i] + soc->dir_conn_addr[i];
@@ -1946,6 +1956,9 @@ static void msm_pinctrl_hibernation_resume(void)
 
     /* Restore normal gpios */
 	for (i = 0; i < soc->ngpios; i++) {
+		if (!chip && !test_bit(i, chip->valid_mask))
+			continue;
+
 		pgroup = &soc->groups[i];
 		msm_writel_ctl(pctrl->gpio_regs[i].ctl_reg, pctrl, pgroup);
 		msm_writel_io(pctrl->gpio_regs[i].io_reg, pctrl, pgroup);
@@ -1958,6 +1971,9 @@ static void msm_pinctrl_hibernation_resume(void)
 	}
 
 	for ( ; i < soc->ngroups; i++) {
+		if (!chip && !test_bit(i, chip->valid_mask))
+			continue;
+
 		pgroup = &soc->groups[i];
 		if (pgroup->ctl_reg)
 			msm_writel_ctl(pctrl->gpio_regs[i].ctl_reg,
@@ -1966,6 +1982,11 @@ static void msm_pinctrl_hibernation_resume(void)
 			msm_writel_io(pctrl->gpio_regs[i].io_reg,
 					pctrl, pgroup);
 	}
+
+	kfree(pctrl->gpio_regs);
+	kfree(pctrl->msm_tile_regs);
+	pctrl->gpio_regs = NULL;
+	pctrl->msm_tile_regs = NULL;
 }
 
 static struct syscore_ops msm_pinctrl_pm_ops = {

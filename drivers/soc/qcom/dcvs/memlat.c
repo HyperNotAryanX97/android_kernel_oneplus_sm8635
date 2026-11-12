@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "qcom-memlat: " fmt
@@ -32,6 +32,8 @@
 #include <soc/qcom/pmu_lib.h>
 #include <linux/scmi_protocol.h>
 #include <linux/sched/clock.h>
+#include <asm/cputype.h>
+#include <linux/math64.h>
 #include <linux/qcom_scmi_vendor.h>
 #include "trace-dcvs.h"
 
@@ -127,7 +129,7 @@ enum mon_type {
 	NUM_MON_TYPES
 };
 
-#define SAMPLING_VOTER	(num_possible_cpus())
+#define SAMPLING_VOTER	max(num_possible_cpus(), 8U)
 #define NUM_FP_VOTERS	(SAMPLING_VOTER + 1)
 
 enum memlat_type {
@@ -595,8 +597,11 @@ static ssize_t show_hlos_cpucp_offset(struct kobject *kobj,
 		pr_err("failed to get cpucp timestamp\n");
 		return ret;
 	}
-
+#ifdef CONFIG_ARM64
 	hlos_ts = sched_clock()/1000;
+#else
+	hlos_ts = div_u64(sched_clock(), 1000);
+#endif
 
 	return scnprintf(buf, PAGE_SIZE, "%ld\n", le64_to_cpu(cpucp_ts) - hlos_ts);
 }
@@ -819,6 +824,50 @@ out:
 	return mem_khz;
 }
 
+static inline u64 calc_freq_mhz(const struct cpu_ctrs *delta, s64 delta_us)
+{
+#ifdef CONFIG_ARM64
+	if (unlikely(!delta_us))
+		return 0;
+	return delta->common_ctrs[CYC_IDX] / delta_us;
+#else
+	if (likely(delta_us)) {
+		u64 temp_freq = delta->common_ctrs[CYC_IDX];
+
+		do_div(temp_freq, delta_us);
+		return temp_freq;
+	} else
+		return 0;
+#endif
+}
+
+static inline u64 calc_fe_stall_pct(const struct cpu_ctrs *delta)
+{
+	u64 fe_stall = delta->common_ctrs[FE_STALL_IDX];
+	u64 cycles   = delta->common_ctrs[CYC_IDX];
+
+		if (!cycles)
+			return 0;
+
+#ifdef CONFIG_ARM64
+	return mult_frac(100, fe_stall, cycles);
+#else
+	return div64_u64((u64)100 * fe_stall, cycles);
+#endif
+}
+
+static inline u64 calc_be_stall_pct(const struct cpu_ctrs *delta)
+{
+	u64 be_stall = delta->common_ctrs[BE_STALL_IDX];
+	u64 cycles   = delta->common_ctrs[CYC_IDX];
+
+#ifdef CONFIG_ARM64
+	return mult_frac(100, be_stall, cycles);
+#else
+	return div64_u64((u64)100 * be_stall, cycles);
+#endif
+}
+
 static void calculate_sampling_stats(void)
 {
 	int i, grp, cpu, level = 0;
@@ -873,20 +922,18 @@ static void calculate_sampling_stats(void)
 					    stats->prev.grp_ctrs[grp][i];
 			}
 		}
+		stats->freq_mhz = calc_freq_mhz(delta, delta_us);
 
-		stats->freq_mhz = delta->common_ctrs[CYC_IDX] / delta_us;
 		if (!memlat_data->common_ev_ids[FE_STALL_IDX])
 			stats->fe_stall_pct = 100;
 		else
-			stats->fe_stall_pct = mult_frac(100,
-					       delta->common_ctrs[FE_STALL_IDX],
-					       delta->common_ctrs[CYC_IDX]);
+			stats->fe_stall_pct = calc_fe_stall_pct(delta);
+
 		if (!memlat_data->common_ev_ids[BE_STALL_IDX])
 			stats->be_stall_pct = 100;
 		else
-			stats->be_stall_pct = mult_frac(100,
-					       delta->common_ctrs[BE_STALL_IDX],
-					       delta->common_ctrs[CYC_IDX]);
+			stats->be_stall_pct = calc_be_stall_pct(delta);
+
 		for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++) {
 			memlat_grp = memlat_data->groups[grp];
 			if (!memlat_grp) {
@@ -895,6 +942,7 @@ static void calculate_sampling_stats(void)
 				continue;
 			}
 			stats->ipm[grp] = delta->common_ctrs[INST_IDX];
+#ifdef CONFIG_ARM64
 			if (delta->grp_ctrs[grp][MISS_IDX])
 				stats->ipm[grp] /=
 					delta->grp_ctrs[grp][MISS_IDX];
@@ -906,7 +954,22 @@ static void calculate_sampling_stats(void)
 				stats->wb_pct[grp] = mult_frac(100,
 						delta->grp_ctrs[grp][WB_IDX],
 						delta->grp_ctrs[grp][ACC_IDX]);
+#else
+			if (delta->grp_ctrs[grp][MISS_IDX])
+				stats->ipm[grp] = div64_u64((u64)stats->ipm[grp],
+						delta->grp_ctrs[grp][MISS_IDX]);
 
+			stats->wb_pct[grp] = 0;
+
+			if (!memlat_grp->grp_ev_ids[WB_IDX] ||
+			!memlat_grp->grp_ev_ids[ACC_IDX]) {
+				stats->wb_pct[grp] = 0;
+			} else if (delta->grp_ctrs[grp][ACC_IDX]) {
+				stats->wb_pct[grp] = div64_u64(100 *
+					delta->grp_ctrs[grp][WB_IDX],
+					delta->grp_ctrs[grp][ACC_IDX]);
+			}
+#endif
 			/* one meas event per memlat_group with group name */
 			trace_memlat_dev_meas(dev_name(memlat_grp->dev), cpu,
 					delta->common_ctrs[INST_IDX],
@@ -1671,8 +1734,16 @@ static int cpucp_memlat_init(struct scmi_device *sdev)
 	}
 
 memlat_unlock:
-	if (ret < 0)
-		memlat_data->ops = NULL;
+	if (ret < 0) {
+		/* Only set ops to NULL if cpucp was enabled on a group */
+		for (i = 0; i < MAX_MEMLAT_GRPS; i++) {
+			grp = memlat_data->groups[i];
+			if (grp && grp->cpucp_enabled) {
+				memlat_data->ops = NULL;
+				break;
+			}
+		}
+	}
 	mutex_unlock(&memlat_lock);
 	return ret;
 }
@@ -1749,10 +1820,13 @@ static int memlat_dev_probe(struct platform_device *pdev)
 			ret = qcom_pmu_event_supported(event_id, cpu);
 			if (!ret)
 				continue;
-			if (ret != -EPROBE_DEFER)
+			if (ret != -EPROBE_DEFER) {
 				dev_err(dev, "ev=%lu not found on cpu%d: %d\n",
 						event_id, cpu, ret);
-			return ret;
+				if (event_id == INST_EV || event_id == CYC_EV)
+					return ret;
+			} else
+				return ret;
 		}
 	}
 

@@ -16,9 +16,9 @@
 #include <linux/phy.h>
 #include <linux/netdevice.h>
 
-#define MTL_MAX_RX_QUEUES	8
-#define MTL_MAX_TX_QUEUES	8
-#define STMMAC_CH_MAX		8
+#define MTL_MAX_RX_QUEUES	12
+#define MTL_MAX_TX_QUEUES	12
+#define STMMAC_CH_MAX		12
 
 #define STMMAC_RX_COE_NONE	0
 #define STMMAC_RX_COE_TYPE1	1
@@ -95,10 +95,20 @@ struct stmmac_dma_cfg {
 	bool pblx8;
 	int fixed_burst;
 	int mixed_burst;
+	int owrq;
+	int orrq;
+	u32 tdps;
+	u32 rdps;
+	u32 txdcsz;
+	u32 rxdcsz;
 	bool aal;
 	bool eame;
 	bool multi_msi_en;
 	bool dche;
+	bool tx_pdma_custom_map;
+	bool rx_pdma_custom_map;
+	u8 tx_pdma_map[MTL_MAX_TX_QUEUES];
+	u8 rx_pdma_map[MTL_MAX_RX_QUEUES];
 };
 
 #define AXI_BLEN	7
@@ -200,7 +210,39 @@ struct emac_emb_smmu_cb_ctx {
 	int ret;
 };
 
+/* Addresses that may be customized by a platform */
+struct dwxgmac_addrs {
+	u32 dma_even_chan_base;
+	u32 dma_odd_chan_base;
+	u32 dma_chan_offset;
+	u32 mtl_chan_base;
+	u32 mtl_chan_offset;
+	u32 timestamp_base;
+	u32 pps_base;
+	u32 pps_offset;
+};
+
+/* Addresses that may be customized by a platform */
+struct dwmac4_addrs {
+	u32 dma_chan;
+	u32 dma_chan_offset;
+	u32 mtl_chan;
+	u32 mtl_chan_offset;
+	u32 mtl_ets_ctrl;
+	u32 mtl_ets_ctrl_offset;
+	u32 mtl_txq_weight;
+	u32 mtl_txq_weight_offset;
+	u32 mtl_send_slp_cred;
+	u32 mtl_send_slp_cred_offset;
+	u32 mtl_high_cred;
+	u32 mtl_high_cred_offset;
+	u32 mtl_low_cred;
+	u32 mtl_low_cred_offset;
+};
+
 struct plat_stmmacenet_data {
+	u32 snps_id;
+	u32 dev_id;
 	int bus_id;
 	int phy_addr;
 	int interface;
@@ -232,12 +274,14 @@ struct plat_stmmacenet_data {
 	u32 host_dma_width;
 	u32 rx_queues_to_use;
 	u32 tx_queues_to_use;
+	bool has_hdma;
+	bool insert_ts_pktid;
 	u8 rx_sched_algorithm;
 	u8 tx_sched_algorithm;
 	struct stmmac_rxq_cfg rx_queues_cfg[MTL_MAX_RX_QUEUES];
 	struct stmmac_txq_cfg tx_queues_cfg[MTL_MAX_TX_QUEUES];
 	void (*fix_mac_speed)(void *priv, unsigned int speed);
-	void (*serdes_loopback_v3_1)(struct plat_stmmacenet_data *plat, bool on);
+	void (*serdes_loopback)(struct plat_stmmacenet_data *plat, bool on);
 	int (*serdes_powerup)(struct net_device *ndev, void *priv);
 	void (*serdes_powerdown)(struct net_device *ndev, void *priv);
 	void (*speed_mode_2500)(struct net_device *ndev, void *priv);
@@ -270,6 +314,7 @@ struct plat_stmmacenet_data {
 	bool en_tx_lpi_clockgating;
 	bool rx_clk_runs_in_lpi;
 	int has_xgmac;
+	struct phylink_pcs *qcom_pcs;
 	unsigned int (*get_plat_tx_coal_frames)
 		(struct sk_buff *skb);
 	u16 (*tx_select_queue)
@@ -286,7 +331,6 @@ struct plat_stmmacenet_data {
 	bool multi_msi_en;
 	int msi_mac_vec;
 	int msi_wol_vec;
-	int msi_lpi_vec;
 	int msi_sfty_ce_vec;
 	int msi_sfty_ue_vec;
 	int msi_rx_base_vec;
@@ -296,14 +340,20 @@ struct plat_stmmacenet_data {
 	struct emac_emb_smmu_cb_ctx stmmac_emb_smmu_ctx;
 	bool phy_intr_en_extn_stm;
 	int has_c22_mdio_probe_capability;
-	int (*handle_prv_ioctl)(struct net_device *dev, struct ifreq *ifr,
-		int cmd);
 	void (*request_phy_wol)(void *plat);
-	int (*init_pps)(void *priv);
 	bool pcs_v3;
+	bool pcs_v4;
 	void (*phy_irq_enable)(void *priv);
 	void (*phy_irq_disable)(void *priv);
 	bool early_eth;
 	bool need_reset;
+	bool mdio_op_busy;
+	atomic_t phy_clks_suspended;
+	struct completion mdio_op;
+	int board_type;
+	int phy_type;
+	const struct dwxgmac_addrs *dwxgmac_addrs;
+	bool serdes_up_after_phy_linkup;
+	const struct dwmac4_addrs *dwmac4_addrs;
 };
 #endif

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2010-2015, 2018-2019, 2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2015 Linaro Ltd.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __QCOM_SCM_H
 #define __QCOM_SCM_H
@@ -145,6 +145,8 @@ static inline void qcom_scm_populate_mem_map_info(
 extern bool qcom_scm_is_available(void);
 extern void *qcom_get_scm_device(void);
 
+extern int qcom_scm_set_warm_boot_addr_mc(void *entry, u32 aff0, u32 aff1,
+					  u32 aff2, u32 flags);
 extern int qcom_scm_set_cold_boot_addr(void *entry, const cpumask_t *cpus);
 extern int qcom_scm_set_warm_boot_addr(void *entry, const cpumask_t *cpus);
 extern void qcom_scm_cpu_power_down(u32 flags);
@@ -168,7 +170,13 @@ extern int qcom_scm_pas_shutdown_retry(u32 peripheral);
 extern bool qcom_scm_pas_supported(u32 peripheral);
 
 extern int qcom_scm_get_sec_dump_state(u32 *dump_state);
+extern int qcom_scm_get_llcc_missrate(phys_addr_t in_buf, size_t in_buf_size,
+				      phys_addr_t out_buf, size_t out_buf_size);
+extern int qcom_scm_get_llcc_occupancy(phys_addr_t in_buf, size_t in_buf_size,
+				phys_addr_t out_buf, size_t out_buf_size);
 extern int qcom_scm_assign_dump_table_region(bool is_assign, phys_addr_t  addr, size_t size);
+extern int qcom_scm_memory_lat_profiler(phys_addr_t in_buf, size_t in_buf_size,
+				phys_addr_t out_buf, size_t out_buf_size);
 
 extern int qcom_scm_tz_blsp_modify_owner(int food, u64 subsystem, int *out);
 
@@ -260,6 +268,7 @@ extern int qcom_scm_ice_invalidate_key(u32 index);
 extern int qcom_scm_ice_set_key(u32 index, const u8 *key, u32 key_size,
 				enum qcom_scm_ice_cipher cipher,
 				u32 data_unit_size);
+extern int qcom_scm_hibernate_exit(void);
 
 extern bool qcom_scm_hdcp_available(void);
 extern int qcom_scm_hdcp_req(struct qcom_scm_hdcp_req *req, u32 req_cnt,
@@ -301,6 +310,7 @@ extern int qcom_scm_query_encrypted_log_feature(u64 *enabled);
 extern int qcom_scm_request_encrypted_log(phys_addr_t buf, size_t len,
 		uint32_t log_id, bool is_full_encrypted_tz_logs_supported,
 		bool is_full_encrypted_tz_logs_enabled);
+extern int qcom_scm_query_log_status(u64 *status);
 
 extern int qcom_scm_ice_restore_cfg(void);
 
@@ -313,11 +323,11 @@ extern int qcom_scm_invoke_smc_legacy(phys_addr_t in_buf, size_t in_buf_size,
 extern int qcom_scm_invoke_callback_response(phys_addr_t out_buf,
 		size_t out_buf_size, int32_t *result, u64 *response_type,
 		unsigned int *data);
+extern int qcom_scm_invoke_ack_doorbell(u32 doorbell_id, u32 msg_id);
 
 extern int qcom_scm_lmh_dcvsh(u32 payload_fn, u32 payload_reg, u32 payload_val,
 			      u64 limit_node, u32 node_id, u64 version);
 extern int qcom_scm_lmh_profile_change(u32 profile_id);
 extern bool qcom_scm_lmh_dcvsh_available(void);
-
 extern int qcom_scm_prefetch_tgt_ctrl(bool en);
 #endif

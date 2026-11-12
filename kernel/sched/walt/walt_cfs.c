@@ -363,7 +363,8 @@ bool select_prev_cpu_fastpath(int prev_cpu, int start_cpu, int order_index,
 static void walt_find_best_target(struct sched_domain *sd,
 					cpumask_t *candidates,
 					struct task_struct *p,
-					struct find_best_target_env *fbt_env)
+					struct find_best_target_env *fbt_env,
+					bool *force_energy_eval)
 {
 	unsigned long min_task_util = uclamp_task_util(p);
 	long target_max_spare_cap = 0;
@@ -409,13 +410,15 @@ static void walt_find_best_target(struct sched_domain *sd,
 	if (packing_cpu >= 0) {
 		fbt_env->fastpath = CLUSTER_PACKING_FASTPATH;
 		cpumask_set_cpu(packing_cpu, candidates);
-			goto out;
+		visited_clusters[cpu_cluster(packing_cpu)->id] = true;
+		goto out;
 	}
 
 	/* fast path for prev_cpu */
 	if (select_prev_cpu_fastpath(prev_cpu, start_cpu, order_index, p)) {
 		fbt_env->fastpath = PREV_CPU_FASTPATH;
 		cpumask_set_cpu(prev_cpu, candidates);
+		visited_clusters[cpu_cluster(prev_cpu)->id] = true;
 		goto out;
 	}
 
@@ -438,6 +441,7 @@ static void walt_find_best_target(struct sched_domain *sd,
 		int target_cpu_cluster = -1;
 		int this_complex_idle = 0;
 		int best_complex_idle = 0;
+		int cluster_id;
 
 		target_max_spare_cap = 0;
 		min_exit_latency = INT_MAX;
@@ -614,6 +618,20 @@ static void walt_find_best_target(struct sched_domain *sd,
 	}
 
 out:
+	search_sibling_cluster = 0;
+	for_each_cpu(cpu, candidates) {
+		struct walt_sched_cluster *cluster = cpu_cluster(cpu);
+		int sibling = cluster->sibling_cluster;
+
+		if ((sibling >= 0) && !visited_clusters[sibling]) {
+			search_sibling_cluster |= BIT(sibling);
+		}
+	}
+	if (search_sibling_cluster) {
+		*force_energy_eval = true;
+		goto retry;
+	}
+
 	trace_sched_find_best_target(p, min_task_util, start_cpu, cpumask_bits(candidates)[0],
 			     most_spare_cap_cpu, order_index, end_index,
 			     fbt_env->skip_cpu, task_on_rq_queued(p), least_nr_cpu,
@@ -967,6 +985,7 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 	struct walt_task_struct *wts;
 #endif
 	int pipeline_cpu;
+	bool force_energy_eval = false;
 
 	if (walt_is_many_wakeup(sibling_count_hint) && prev_cpu != cpu &&
 			cpumask_test_cpu(prev_cpu, p->cpus_ptr))
@@ -1023,7 +1042,6 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 
 
 	rcu_read_lock();
-	need_idle |= uclamp_latency_sensitive(p);
 
 	fbt_env.fastpath = 0;
 	fbt_env.need_idle = need_idle;
@@ -1032,10 +1050,12 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 		sync = 0;
 
 	if (sysctl_sched_sync_hint_enable && sync
-			&& bias_to_this_cpu(p, cpu, start_cpu) && !cpu_halted(cpu)) {
-		best_energy_cpu = cpu;
-		fbt_env.fastpath = SYNC_WAKEUP;
-		goto unlock;
+	    && bias_to_this_cpu(p, cpu, start_cpu) && !cpu_halted(cpu)) {
+		if (cpu_cluster(cpu)->sibling_cluster == -1) {
+			best_energy_cpu = cpu;
+			fbt_env.fastpath = SYNC_WAKEUP;
+			goto unlock;
+		}
 	}
 
 	/* if symmetrical system, default to upstream behavior */
@@ -1052,7 +1072,8 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 	fbt_env.skip_cpu = walt_is_many_wakeup(sibling_count_hint) ?
 			   cpu : -1;
 
-	walt_find_best_target(NULL, candidates, p, &fbt_env);
+	walt_find_best_target(NULL, candidates, p, &fbt_env, &force_energy_eval);
+
 
 	/* Bail out if no candidate was found. */
 	weight = cpumask_weight(candidates);
@@ -1061,7 +1082,7 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 
 	first_cpu = cpumask_first(candidates);
 
-	if (fbt_env.fastpath == CLUSTER_PACKING_FASTPATH) {
+	if ((fbt_env.fastpath == CLUSTER_PACKING_FASTPATH) && !force_energy_eval) {
 		best_energy_cpu = first_cpu;
 		goto unlock;
 	}
@@ -1078,7 +1099,7 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 		goto unlock;
 	}
 
-	if (!energy_eval_needed) {
+	if (!energy_eval_needed && !force_energy_eval) {
 		int max_spare_cpu = first_cpu;
 
 		for_each_cpu(cpu, candidates) {

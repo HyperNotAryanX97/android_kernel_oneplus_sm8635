@@ -4014,6 +4014,11 @@ bool cpus_share_cache(int this_cpu, int that_cpu)
 
 static inline bool ttwu_queue_cond(struct task_struct *p, int cpu)
 {
+#ifdef CONFIG_SMP
+	if (p->sched_class == &stop_sched_class)
+		return false;
+#endif
+
 	/*
 	 * Do not complicate things with the async wake_list while the CPU is
 	 * in hotplug state.
@@ -7289,8 +7294,18 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 			if (rt_prio(oldprio))
 				p->rt.timeout = 0;
 		}
-
-		__setscheduler_prio(p, prio);
+	} else if (rt_prio(prio)) {
+		if (dl_prio(oldprio))
+			p->dl.pi_se = &p->dl;
+		if (oldprio < prio)
+			queue_flag |= ENQUEUE_HEAD;
+	} else {
+		if (dl_prio(oldprio))
+			p->dl.pi_se = &p->dl;
+		else if (rt_prio(oldprio))
+			p->rt.timeout = 0;
+		else if (!task_has_idle_policy(p))
+			reweight_task(p, prio - MAX_RT_PRIO);
 	}
 
 	check_class_changed(rq, p, prev_class, oldprio);

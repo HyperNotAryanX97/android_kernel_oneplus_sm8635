@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <linux/irqdomain.h>
 #include <linux/delay.h>
@@ -34,6 +34,7 @@
 #include <asm/hardirq.h>
 #include <linux/suspend.h>
 #include <linux/notifier.h>
+#include <linux/kmsg_dump.h>
 
 #define MASK_SIZE        32
 
@@ -732,6 +733,11 @@ static irqreturn_t qcom_wdt_bark_handler(int irq, void *dev_id)
     /* donelle@BSP,  delete trigger wdog bite, panic will trigger wdog if in dload mode*/
     panic("Handle a watchdog bite! - Falling back to kernel panic!");
 #else
+#if defined(CONFIG_ARCH_QTI_VM) && !defined(MODULE)
+	/* Dump logs to shared memory for QTVM */
+	kmsg_dump(KMSG_DUMP_OOPS);
+#endif
+
 	md_dump_process();
 	qcom_wdt_trigger_bite();
 #endif

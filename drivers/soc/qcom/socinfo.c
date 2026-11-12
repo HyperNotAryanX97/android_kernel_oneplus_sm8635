@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2009-2017, 2021 The Linux Foundation. All rights reserved.
  * Copyright (c) 2017-2019, Linaro Ltd.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/debugfs.h>
@@ -55,7 +55,9 @@ enum {
 	HW_PLATFORM_HDK = 31,
 	HW_PLATFORM_ATP = 33,
 	HW_PLATFORM_IDP = 34,
+	HW_PLATFORM_WDP = 36,
 	HW_PLATFORM_QXR = 38,
+	HW_PLATFORM_QAR = 44,
 	HW_PLATFORM_INVALID
 };
 
@@ -80,7 +82,9 @@ static const char * const hw_platform[] = {
 	[HW_PLATFORM_HDK] = "HDK",
 	[HW_PLATFORM_ATP] = "ATP",
 	[HW_PLATFORM_IDP] = "IDP",
+	[HW_PLATFORM_WDP] = "WDP",
 	[HW_PLATFORM_QXR] = "QXR",
+	[HW_PLATFORM_QAR] = "QAR",
 };
 
 enum {
@@ -262,6 +266,9 @@ static const char *const pmic_models[] = {
 	[52] = "PMR735B",
 	[58] = "PM8450",
 	[65] = "PM8010",
+	[78] = "PMM8650",
+	[79] = "PMM8650",
+	[99] = "PMAR2230",
 };
 #endif /* CONFIG_DEBUG_FS */
 
@@ -327,6 +334,11 @@ struct socinfo {
 	__le32 boot_core;
 	/* Version 20 */
 	__le32 raw_package_type;
+	/* Version 21 */
+	__le32 nsubpart_feat_array_offset;
+	/* Version 23 */
+	__le32 part_instances_offset;
+	__le32 num_part_instances;
 } *socinfo;
 
 #ifdef CONFIG_DEBUG_FS
@@ -354,6 +366,7 @@ struct socinfo_params {
 	u32 boot_cluster;
 	u32 boot_core;
 	u32 raw_package_type;
+	u32 nsubpart_feat_array_offset;
 };
 
 struct smem_image_version {
@@ -575,6 +588,8 @@ static const struct soc_id soc_id[] = {
 	{ 565, "BLAIRP" },
 	{ 629, "NIOBE" },
 	{ 652, "NIOBE" },
+	{ 672, "SERAPH" },
+	{ 673, "SERAPHP" },
 	{ 577, "PINEAPPLEP" },
 	{ 578, "BLAIR-LITE" },
 	{ 605, "SA_MONACOAU_ADAS" },
@@ -589,7 +604,20 @@ static const struct soc_id soc_id[] = {
 	{ 641, "VOLCANO6P" },
 	{ 642, "CLIFFSP" },
 	{ 643, "CLIFFS7P" },
+	{ 682, "SG_PINEAPPLE" },
+	{ 696, "PINEAPPLEQ" },
+	{ 700, "SG_CLIFFS7P" },
 	{ 549, "ANORAK" },
+	{ 554, "NEO-LA" },
+	{ 739, "ALISO-SG" },
+	{ 740, "ALISO-SG2" },
+	{ 525, "NEO-LE" },
+	{ 579, "NEO-LA-V2" },
+	{ 645, "QCM_PINEAPPLE" },
+	{ 646, "QCS_PINEAPPLE" },
+	{ 702, "QCS8625_PINEAPPLE" },
+	{ 712, "VOLCANOP" },
+	{ 788, "SNOWMASS" },
 };
 
 static struct attribute *msm_custom_socinfo_attrs[MAX_SOCINFO_ATTRS];
@@ -642,6 +670,14 @@ static uint32_t socinfo_get_chip_family(void)
 		: 0;
 }
 
+static uint32_t socinfo_get_raw_device_num(void)
+{
+	return socinfo ?
+		(socinfo_format >= SOCINFO_VERSION(0, 12) ?
+		 le32_to_cpu(socinfo->raw_device_num) : 0)
+		: 0;
+}
+
 /* Version 13 */
 static char *socinfo_get_chip_name(void)
 {
@@ -649,6 +685,14 @@ static char *socinfo_get_chip_name(void)
 		(socinfo_format >= SOCINFO_VERSION(0, 13) ?
 		 socinfo->chip_id : "N/A")
 		: "N/A";
+}
+
+static uint32_t socinfo_get_nproduct_id(void)
+{
+	return socinfo ?
+		(socinfo_format >= SOCINFO_VERSION(0, 13) ?
+		 le32_to_cpu(socinfo->nproduct_id) : 0)
+		: 0;
 }
 
 /* Version 14 */
@@ -748,6 +792,15 @@ static uint32_t socinfo_get_pcode_id(void)
 		return SOCINFO_PCODE_UNKNOWN;
 
 	return pcode;
+}
+
+/* Version 21 */
+static uint32_t socinfo_get_nsubpart_feat_array_offset(void)
+{
+	return socinfo ?
+		(socinfo_format >= SOCINFO_VERSION(0, 21) ?
+		 le32_to_cpu(socinfo->nsubpart_feat_array_offset) : 0)
+		: 0;
 }
 
 /* Exported APIs */
@@ -946,6 +999,9 @@ socinfo_get_subpart_info(enum subset_part_type part,
 
 	num_subset_parts = socinfo_get_num_subset_parts();
 	offset = socinfo_get_nsubset_parts_array_offset();
+	if (socinfo_format >= SOCINFO_VERSION(0, 21))
+		offset = socinfo_get_nsubpart_feat_array_offset();
+
 	if (!num_subset_parts || !offset)
 		return -EINVAL;
 
@@ -1041,6 +1097,16 @@ msm_get_chip_family(struct device *dev,
 }
 ATTR_DEFINE(chip_family);
 
+static ssize_t
+msm_get_raw_device_number(struct device *dev,
+		struct device_attribute *attr,
+		char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "0x%x\n",
+			socinfo_get_raw_device_num());
+}
+ATTR_DEFINE(raw_device_number);
+
 /* Version 13 */
 static ssize_t
 msm_get_chip_id(struct device *dev,
@@ -1051,6 +1117,16 @@ msm_get_chip_id(struct device *dev,
 			socinfo_get_chip_name());
 }
 ATTR_DEFINE(chip_id);
+
+static ssize_t
+msm_get_nproduct_id(struct device *dev,
+		struct device_attribute *attr,
+		char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "0x%x\n",
+			socinfo_get_nproduct_id());
+}
+ATTR_DEFINE(nproduct_id);
 
 /* Version 14 */
 static ssize_t
@@ -1181,6 +1257,8 @@ static void socinfo_populate_sysfs(struct qcom_socinfo *qcom_socinfo)
 	int i = 0;
 
 	switch (socinfo_format) {
+	case SOCINFO_VERSION(0, 23):
+	case SOCINFO_VERSION(0, 21):
 	case SOCINFO_VERSION(0, 20):
 	case SOCINFO_VERSION(0, 19):
 	case SOCINFO_VERSION(0, 18):
@@ -1220,9 +1298,11 @@ static void socinfo_populate_sysfs(struct qcom_socinfo *qcom_socinfo)
 		fallthrough;
 	case SOCINFO_VERSION(0, 13):
 		msm_custom_socinfo_attrs[i++] = &dev_attr_chip_id.attr;
+		msm_custom_socinfo_attrs[i++] = &dev_attr_nproduct_id.attr;
 		fallthrough;
 	case SOCINFO_VERSION(0, 12):
 		msm_custom_socinfo_attrs[i++] = &dev_attr_chip_family.attr;
+		msm_custom_socinfo_attrs[i++] = &dev_attr_raw_device_number.attr;
 		fallthrough;
 	case SOCINFO_VERSION(0, 11):
 	case SOCINFO_VERSION(0, 10):
@@ -1433,6 +1513,8 @@ static void socinfo_debugfs_init(struct qcom_socinfo *qcom_socinfo,
 			   &qcom_socinfo->info.fmt);
 
 	switch (qcom_socinfo->info.fmt) {
+	case SOCINFO_VERSION(0, 23):
+	case SOCINFO_VERSION(0, 21):
 	case SOCINFO_VERSION(0, 20):
 		qcom_socinfo->info.raw_package_type = __le32_to_cpu(info->raw_package_type);
 		debugfs_create_u32("raw_package_type", 0444, qcom_socinfo->dbg_root,

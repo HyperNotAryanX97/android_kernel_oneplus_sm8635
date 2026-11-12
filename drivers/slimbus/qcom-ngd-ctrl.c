@@ -1606,6 +1606,7 @@ static void qcom_slim_ngd_notify_slaves(struct qcom_slim_ngd_ctrl *ctrl)
 
 		if (slim_get_logical_addr(sbdev))
 			dev_err(ctrl->dev, "Failed to get logical address\n");
+		put_device(&sbdev->dev);
 	}
 }
 
@@ -1832,7 +1833,7 @@ static void qcom_slim_ngd_up_worker(struct work_struct *work)
 	/* Make sure qmi service is up before continuing */
 	if (!wait_for_completion_interruptible_timeout(&ctrl->qmi_up,
 						       msecs_to_jiffies(MSEC_PER_SEC))) {
-		dev_err(ctrl->dev, "QMI wait timeout\n");
+		SLIM_INFO(ctrl, "QMI wait timeout\n");
 		return;
 	}
 

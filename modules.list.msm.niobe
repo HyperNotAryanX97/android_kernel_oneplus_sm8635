@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 qcom-scm.ko
 mem_buf.ko
 cmd-db.ko
@@ -45,7 +45,7 @@ qcom_hwspinlock.ko
 smem.ko
 socinfo.ko
 qcom-ipcc.ko
-phy-qcom-ufs-qmp-v4-pineapple.ko
+phy-qcom-ufs-qmp-v4-niobe.ko
 phy-qcom-ufs.ko
 phy-qcom-ufs-qrbtc-sdm845.ko
 spmi-pmic-arb.ko
@@ -83,11 +83,11 @@ kryo_arm64_edac.ko
 gh_arm_drv.ko
 gh_cpusys_vm_mem_access.ko
 gh_dbl.ko
+gh_mem_notifier.ko
 gh_msgq.ko
 gh_rm_drv.ko
 gunyah.ko
 gunyah_loader.ko
-gunyah_qcom.ko
 mem_buf_msgq.ko
 debug_symbol.ko
 minidump.ko

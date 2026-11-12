@@ -270,6 +270,13 @@ static inline bool rwsem_read_trylock(struct rw_semaphore *sem, long *cntp)
 		return true;
 	}
 
+	trace_android_vh_rwsem_read_trylock_failed(sem, cntp, &ret);
+	if (ret) {
+		rwsem_set_reader_owned(sem);
+		trace_android_vh_record_rwsem_lock_starttime(current, jiffies);
+		return true;
+	}
+
 	return false;
 }
 

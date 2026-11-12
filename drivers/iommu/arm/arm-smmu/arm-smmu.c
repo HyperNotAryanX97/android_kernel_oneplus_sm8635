@@ -14,7 +14,7 @@
  *	- Context fault reporting
  *	- Extended Stream ID (16 bit)
  *
- * Copyright (c) 2021-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "arm-smmu: " fmt
@@ -1470,6 +1470,11 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 		ret = smmu->impl->init_context(smmu_domain, pgtbl_cfg, dev);
 		if (ret)
 			goto out_clear_smmu;
+	}
+
+	if (IS_ENABLED(CONFIG_QCOM_SMMU_IRGN0_ERRATA)) {
+		if (!of_device_is_compatible(smmu->dev->of_node, "qcom,adreno-smmu"))
+			pgtbl_cfg->quirks |= IO_PGTABLE_QUIRK_QCOM_TCR_IRGN_NC;
 	}
 
 	if (smmu_domain->pgtbl_quirks)
@@ -3731,9 +3736,6 @@ static void arm_smmu_device_shutdown(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
 
-	if (!smmu)
-		return;
-
 	if (!bitmap_empty(smmu->context_map, ARM_SMMU_MAX_CBS))
 		dev_notice(&pdev->dev, "disabling translation\n");
 
@@ -3751,19 +3753,14 @@ static void arm_smmu_device_shutdown(struct platform_device *pdev)
 		arm_smmu_power_off(smmu, smmu->pwr);
 }
 
-static int arm_smmu_device_remove(struct platform_device *pdev)
+static void arm_smmu_device_remove(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
-
-	if (!smmu)
-		return -ENODEV;
 
 	iommu_device_unregister(&smmu->iommu);
 	iommu_device_sysfs_remove(&smmu->iommu);
 
 	arm_smmu_device_shutdown(pdev);
-
-	return 0;
 }
 
 static int __maybe_unused arm_smmu_runtime_resume(struct device *dev)
@@ -3787,7 +3784,7 @@ static int __maybe_unused arm_smmu_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused arm_smmu_pm_resume_common(struct device *dev)
+static int __maybe_unused arm_smmu_pm_resume(struct device *dev)
 {
 	int ret;
 	struct arm_smmu_device *smmu = dev_get_drvdata(dev);
@@ -3888,11 +3885,21 @@ static int __maybe_unused arm_smmu_pm_restore_early(struct device *dev)
 		smmu_domain->pgtbl_ops = pgtbl_ops;
 		arm_smmu_init_context_bank(smmu_domain, pgtbl_cfg);
 	}
-	ret = arm_smmu_pm_resume_common(dev);
+	/*
+	 * Power on transiently to reprogram SMMU registers cleared during
+	 * hibernation, then power off to restore the pre-hibernation state.
+	 * arm_smmu_device_reset() reprograms all context banks and global
+	 * registers that are cleared when secure memory is reclaimed.
+	 */
+	ret = arm_smmu_runtime_resume(dev);
 	if (ret) {
 		dev_err(dev, "Failed to resume\n");
 		return ret;
 	}
+
+	arm_smmu_device_reset(smmu);
+	arm_smmu_runtime_suspend(dev);
+
 	return 0;
 }
 
@@ -3903,7 +3910,13 @@ static int __maybe_unused arm_smmu_pm_freeze_late(struct device *dev)
 	struct arm_smmu_cb *cb;
 	int idx, ret;
 
-	ret = arm_smmu_power_on(smmu->pwr);
+	/*
+	 * Power on unconditionally to access SMMU registers for freeing
+	 * secure page tables, regardless of the current runtime PM state.
+	 * arm_smmu_runtime_suspend() at the end will power off and leave
+	 * the device in a suspended state before hibernation.
+	 */
+	ret = arm_smmu_runtime_resume(dev);
 	if (ret) {
 		dev_err(smmu->dev, "Couldn't power on the smmu during pm freeze: %d\n", ret);
 		return ret;
@@ -3924,7 +3937,6 @@ static int __maybe_unused arm_smmu_pm_freeze_late(struct device *dev)
 		dev_err(dev, "Failed to suspend\n");
 		return ret;
 	}
-	arm_smmu_power_off(smmu, smmu->pwr);
 	return 0;
 }
 
@@ -3932,9 +3944,6 @@ static int __maybe_unused arm_smmu_pm_suspend(struct device *dev)
 {
 	int ret = 0;
 	struct arm_smmu_device *smmu = dev_get_drvdata(dev);
-
-	if (pm_suspend_target_state == PM_SUSPEND_MEM)
-		return arm_smmu_pm_freeze_late(dev);
 
 	if (pm_runtime_suspended(dev))
 		goto clk_unprepare;
@@ -3946,14 +3955,6 @@ static int __maybe_unused arm_smmu_pm_suspend(struct device *dev)
 clk_unprepare:
 	clk_bulk_unprepare(smmu->num_clks, smmu->clks);
 	return ret;
-}
-
-static int __maybe_unused arm_smmu_pm_resume(struct device *dev)
-{
-	if (pm_suspend_target_state == PM_SUSPEND_MEM)
-		return arm_smmu_pm_restore_early(dev);
-	else
-		return arm_smmu_pm_resume_common(dev);
 }
 
 static const struct dev_pm_ops arm_smmu_pm_ops = {
@@ -3975,7 +3976,7 @@ static struct platform_driver arm_smmu_driver = {
 		.suppress_bind_attrs    = true,
 	},
 	.probe	= arm_smmu_device_probe,
-	.remove	= arm_smmu_device_remove,
+	.remove_new = arm_smmu_device_remove,
 	.shutdown = arm_smmu_device_shutdown,
 };
 

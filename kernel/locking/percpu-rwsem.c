@@ -290,7 +290,6 @@ void __sched percpu_down_write(struct percpu_rw_semaphore *sem)
 	 */
 
 	/* Wait for all active readers to complete. */
-	pcp_wait_handler(sem, 1, 3);
 	trace_android_rvh_percpu_rwsem_wait_complete(sem, TASK_UNINTERRUPTIBLE, &complete);
 	if (!complete)
 		rcuwait_wait_event(&sem->writer, readers_active_check(sem), TASK_UNINTERRUPTIBLE);

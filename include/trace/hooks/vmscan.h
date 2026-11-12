@@ -21,13 +21,13 @@ DECLARE_HOOK(android_vh_shrink_slab_bypass,
 DECLARE_HOOK(android_vh_do_shrink_slab,
 	TP_PROTO(struct shrinker *shrinker, long *freeable),
 	TP_ARGS(shrinker, freeable));
-DECLARE_HOOK(android_vh_throttle_direct_reclaim_bypass,
-	TP_PROTO(bool *bypass),
-	TP_ARGS(bypass));
 DECLARE_HOOK(android_vh_do_shrink_slab_ex,
 	TP_PROTO(struct shrink_control *shrinkctl, struct shrinker *shrinker,
 	        long *freeable, int priority),
 	TP_ARGS(shrinkctl, shrinker, freeable, priority));
+DECLARE_HOOK(android_vh_throttle_direct_reclaim_bypass,
+	TP_PROTO(bool *bypass),
+	TP_ARGS(bypass));
 DECLARE_HOOK(android_vh_shrink_node_memcgs,
 	TP_PROTO(struct mem_cgroup *memcg, bool *skip),
 	TP_ARGS(memcg, skip));
@@ -49,6 +49,12 @@ DECLARE_HOOK(android_vh_remove_mapping,
 DECLARE_HOOK(android_vh_remove_mapping_failed,
 	TP_PROTO(struct address_space *mapping, struct folio *folio, bool reclaimed),
 	TP_ARGS(mapping, folio, reclaimed));
+DECLARE_HOOK(android_vh_handle_folio_writeback,
+	TP_PROTO(struct folio *folio, bool *bypass),
+	TP_ARGS(folio, bypass));
+DECLARE_HOOK(android_vh_reclaim_before_kswapd,
+	TP_PROTO(unsigned long *nr_reclaimed),
+	TP_ARGS(nr_reclaimed));
 DECLARE_HOOK(android_vh_check_folio_look_around_ref,
 	TP_PROTO(struct folio *folio, int *skip),
 	TP_ARGS(folio, skip));

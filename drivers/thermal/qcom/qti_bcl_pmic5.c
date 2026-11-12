@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
 
@@ -43,6 +43,8 @@
 #define BCL_IBAT_READ         0x86
 #define BCL_IBAT_SCALING_UA   78127
 #define BCL_IBAT_CCM_SCALING_UA   15625
+#define BCL_IBAT_CCM_LANDO_SCALING_UA   152
+#define BCL_ADC_IBAT_CCM_LANDO_SCALING_UA   39062
 #define BCL_IBAT_SCALING_REV4_UA  93753
 
 #define BCL_VBAT_READ         0x76
@@ -73,6 +75,10 @@
 #define BCL_IBAT_CCM_OFFSET   800
 #define BCL_IBAT_CCM_LSB      100
 #define BCL_IBAT_CCM_MAX_VAL  14
+
+#define BCL_IBAT_CCM_LANDO_OFFSET   900
+#define BCL_IBAT_CCM_LANDO_LSB      150
+#define BCL_IBAT_CCM_LANDO_MAX_VAL  16
 
 #define BCL_VBAT_4G_NO_READING 0x7fff
 #define BCL_GEN4_MAJOR_REV    5
@@ -306,17 +312,18 @@ static void convert_adc_to_ibat_val(struct bcl_device *bcl_perph, int *val, int 
 				1000 * bcl_ibat_ext_ranges[BCL_IBAT_RANGE_LVL0]);
 }
 
-static int8_t convert_ibat_to_ccm_val(int ibat)
+static int8_t convert_ibat_to_ccm_val(int ibat,
+	int ibat_ccm_max_val, int ibat_ccm_offset, int ibat_ccm_lsb)
 {
-	int8_t val = BCL_IBAT_CCM_MAX_VAL;
+	int8_t val = ibat_ccm_max_val;
 
-	val = (int8_t)((ibat - BCL_IBAT_CCM_OFFSET) / BCL_IBAT_CCM_LSB);
+	val = (int8_t)((ibat - ibat_ccm_offset) / ibat_ccm_lsb);
 
-	if (val > BCL_IBAT_CCM_MAX_VAL) {
+	if (val > ibat_ccm_max_val) {
 		pr_err(
 		"CCM thresh:%d is invalid, use MAX supported threshold\n",
 			ibat);
-		val = BCL_IBAT_CCM_MAX_VAL;
+		val = ibat_ccm_max_val;
 	}
 
 	return val;
@@ -349,6 +356,10 @@ static int bcl_set_ibat(struct thermal_zone_device *tz, int low, int high)
 		convert_ibat_to_adc_val(bat_data->dev, &thresh_value,
 				BCL_IBAT_CCM_SCALING_UA *
 				bat_data->dev->ibat_ext_range_factor);
+	else if (bat_data->dev->ibat_ccm_lando_enabled)
+		convert_ibat_to_adc_val(bat_data->dev, &thresh_value,
+				BCL_ADC_IBAT_CCM_LANDO_SCALING_UA *
+				bat_data->dev->ibat_ext_range_factor);
 	else if (bat_data->dev->dig_major >= BCL_GEN4_MAJOR_REV &&
 				bat_data->dev->ana_major >= BCL_GEN4_ANA_MAJOR)
 		convert_ibat_to_adc_val(bat_data->dev, &thresh_value,
@@ -377,7 +388,12 @@ static int bcl_set_ibat(struct thermal_zone_device *tz, int low, int high)
 			bat_data->dev->bcl_param_1 & BCL_PARAM_HAS_IBAT_ADC)
 			addr = BCL_IBAT_TOO_HIGH_REV4;
 		if (bat_data->dev->ibat_ccm_enabled)
-			val = convert_ibat_to_ccm_val(ibat_ua);
+			val = convert_ibat_to_ccm_val(ibat_ua,
+				BCL_IBAT_CCM_MAX_VAL, BCL_IBAT_CCM_OFFSET, BCL_IBAT_CCM_LSB);
+		if (bat_data->dev->ibat_ccm_lando_enabled)
+			val = convert_ibat_to_ccm_val(ibat_ua,
+				BCL_IBAT_CCM_LANDO_MAX_VAL, BCL_IBAT_CCM_LANDO_OFFSET,
+				BCL_IBAT_CCM_LANDO_LSB);
 		pr_debug("ibat too high threshold:%d mA ADC:0x%02x\n",
 				ibat_ua, val);
 		break;
@@ -431,6 +447,10 @@ static int bcl_read_ibat(struct thermal_zone_device *tz, int *adc_value)
 		if (bat_data->dev->ibat_ccm_enabled)
 			convert_adc_to_ibat_val(bat_data->dev, adc_value,
 				BCL_IBAT_CCM_SCALING_UA *
+				bat_data->dev->ibat_ext_range_factor);
+		else if (bat_data->dev->ibat_ccm_lando_enabled)
+			convert_adc_to_ibat_val(bat_data->dev, adc_value,
+				BCL_IBAT_CCM_LANDO_SCALING_UA *
 				bat_data->dev->ibat_ext_range_factor);
 		else if (bat_data->dev->dig_major >= BCL_GEN4_MAJOR_REV
 				&& bat_data->dev->ana_major >= BCL_GEN4_ANA_MAJOR)
@@ -588,6 +608,9 @@ static int bcl_set_lbat(struct thermal_zone_device *tz, int low, int high)
 	struct bcl_peripheral_data *bat_data =
 		(struct bcl_peripheral_data *)tz->devdata;
 	struct bcl_device *bcl_perph = bat_data->dev;
+
+	if (bat_data->irq_freed)
+		return 0;
 
 	mutex_lock(&bat_data->state_trans_lock);
 
@@ -922,7 +945,8 @@ static int bcl_get_devicetree_data(struct platform_device *pdev,
 				"qcom,pmic7-threshold");
 	bcl_perph->ibat_ccm_enabled =  of_property_read_bool(dev_node,
 						"qcom,ibat-ccm-hw-support");
-
+	bcl_perph->ibat_ccm_lando_enabled = of_property_read_bool(dev_node,
+						"qcom,ibat-ccm-lando-hw-support");
 	ret = bcl_get_ibat_ext_range_factor(pdev,
 					&bcl_perph->ibat_ext_range_factor);
 
@@ -1250,6 +1274,66 @@ static int bcl_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int bcl_freeze(struct device *dev)
+{
+	struct bcl_device *bcl_perph = dev_get_drvdata(dev);
+	int i;
+	struct bcl_peripheral_data *bcl_data;
+
+	for (i = 0; i < ARRAY_SIZE(bcl_int_names); i++) {
+		bcl_data = &bcl_perph->param[i];
+
+		mutex_lock(&bcl_data->state_trans_lock);
+		if (bcl_data->irq_num > 0 && bcl_data->irq_enabled) {
+			disable_irq(bcl_data->irq_num);
+			bcl_data->irq_enabled = false;
+		}
+		devm_free_irq(dev, bcl_data->irq_num, bcl_data);
+		bcl_data->irq_freed = true;
+		mutex_unlock(&bcl_data->state_trans_lock);
+	}
+	return 0;
+}
+
+static int bcl_restore(struct device *dev)
+{
+	struct bcl_device *bcl_perph = dev_get_drvdata(dev);
+	struct bcl_peripheral_data *bcl_data;
+	int ret = 0, i;
+
+	for (i = 0; i < ARRAY_SIZE(bcl_int_names); i++) {
+		bcl_data = &bcl_perph->param[i];
+		mutex_lock(&bcl_data->state_trans_lock);
+		if (bcl_data->irq_num > 0 && !bcl_data->irq_enabled) {
+			ret = devm_request_threaded_irq(dev,
+					bcl_data->irq_num, NULL, bcl_handle_irq,
+					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+					bcl_int_names[i], bcl_data);
+			if (ret) {
+				dev_err(dev,
+					"Error requesting trip irq. err:%d\n",
+					ret);
+				mutex_unlock(&bcl_data->state_trans_lock);
+				return -EINVAL;
+			}
+			disable_irq_nosync(bcl_data->irq_num);
+			bcl_data->irq_freed = false;
+		}
+		mutex_unlock(&bcl_data->state_trans_lock);
+
+		if (bcl_data->tz_dev)
+			thermal_zone_device_update(bcl_data->tz_dev, THERMAL_DEVICE_UP);
+	}
+	bcl_configure_bcl_peripheral(bcl_perph);
+
+	return 0;
+}
+
+static const struct dev_pm_ops bcl_pm_ops = {
+	.freeze = bcl_freeze,
+	.restore = bcl_restore,
+};
+
 static const struct of_device_id bcl_match[] = {
 	{
 		.compatible = "qcom,bcl-v5",
@@ -1262,6 +1346,7 @@ static struct platform_driver bcl_driver = {
 	.remove = bcl_remove,
 	.driver = {
 		.name           = BCL_DRIVER_NAME,
+		.pm = &bcl_pm_ops,
 		.of_match_table = bcl_match,
 	},
 };

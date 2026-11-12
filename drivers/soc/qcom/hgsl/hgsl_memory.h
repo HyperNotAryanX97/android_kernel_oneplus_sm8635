@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef HGSL_MEMORY_INCLUDED
@@ -10,6 +10,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
+#include <linux/rbtree.h>
 #include "hgsl_types.h"
 #include "hgsl_utils.h"
 
@@ -48,8 +49,13 @@ enum gsl_user_mem_type_t {
 	GSL_USER_MEM_TYPE_ION          = 0x00000003
 };
 
+struct hgsl_cache_flags {
+	bool default_iocoherency;
+	bool writecombine_enable;
+};
+
 struct hgsl_mem_node {
-	struct list_head           node;
+	struct rb_node             mem_rb_node;
 	struct gsl_memdesc_t       memdesc;
 	int32_t                    fd;
 	uint32_t                   export_id;
@@ -65,7 +71,7 @@ struct hgsl_mem_node {
 	void                      *vmapping;
 	uint32_t                  vmap_count;
 	uint32_t                  flags;
-	bool                      default_iocoherency;
+	struct hgsl_cache_flags   cache_flags;
 	char                      metainfo[HGSL_MEM_META_MAX_SIZE];
 };
 
@@ -79,9 +85,21 @@ int hgsl_mem_cache_op(struct device *dev, struct hgsl_mem_node *mem_node,
 
 void hgsl_put_sgt(struct hgsl_mem_node *mem_node, bool internal);
 
-struct hgsl_mem_node *hgsl_mem_find_base_locked(struct list_head *head,
-	uint64_t gpuaddr, uint64_t size);
+void *hgsl_mem_node_zalloc(struct hgsl_cache_flags cache_flags);
 
-void *hgsl_mem_node_zalloc(bool iocoherency);
+int hgsl_mem_add_node(struct rb_root *rb_root,
+		struct hgsl_mem_node *mem_node);
+struct hgsl_mem_node *hgsl_mem_find_node_locked(
+		struct rb_root *rb_root, uint64_t gpuaddr,
+		uint64_t size, bool accurate);
+
+static inline bool hgsl_mem_range_inspect(uint64_t da1, uint64_t da2,
+			uint64_t size1, uint64_t size2, bool accurate)
+{
+	if (accurate)
+		return ((da1 == da2) && (size1 == size2));
+	else
+		return ((da1 <= da2) && (da1 + size1) >= (da2 + size2));
+}
 
 #endif

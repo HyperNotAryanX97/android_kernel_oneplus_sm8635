@@ -710,6 +710,12 @@ static int spi_geni_init(struct spi_geni_master *mas)
 	case 0:
 		mas->cur_xfer_mode = GENI_SE_FIFO;
 		geni_se_select_mode(se, GENI_SE_FIFO);
+		/* setup_fifo_params assumes that these registers start with a zero value */
+		writel(0, se->base + SE_SPI_LOOPBACK);
+		writel(0, se->base + SE_SPI_DEMUX_SEL);
+		writel(0, se->base + SE_SPI_CPHA);
+		writel(0, se->base + SE_SPI_CPOL);
+		writel(0, se->base + SE_SPI_DEMUX_OUTPUT_INV);
 		ret = 0;
 		break;
 	}
@@ -1117,6 +1123,9 @@ static int spi_geni_probe(struct platform_device *pdev)
 	if (device_property_read_bool(&pdev->dev, "spi-slave"))
 		spi->slave = true;
 
+	if (device_property_read_bool(&pdev->dev, "spi-slave"))
+		spi->slave = true;
+
 	ret = geni_icc_get(&mas->se, NULL);
 	if (ret)
 		return ret;
@@ -1171,6 +1180,7 @@ static void spi_geni_remove(struct platform_device *pdev)
 	spi_unregister_master(spi);
 
 	free_irq(mas->irq, spi);
+	pm_runtime_disable(&pdev->dev);
 
 	spi_geni_release_dma_chan(mas);
 }
